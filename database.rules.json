@@ -1,0 +1,16 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    "events": {
+      "$locationId": {
+        "$name": {
+            ".indexOn": "id"
+          }
+      }
+    },
+    "users":{
+      ".indexOn": "webhookKey"
+    }
+  }
+}
