@@ -36,6 +36,7 @@ exports.webhook = functions.https.onRequest((req, res) => {
 
     //check for webhookKey property
     if (!payload.hasOwnProperty('webhookKey')) {
+        console.error('Missing webhookKey in payload.');
         return res.send(400);
     }
 
@@ -49,14 +50,14 @@ exports.webhook = functions.https.onRequest((req, res) => {
                 if (users.hasOwnProperty(userKey)) {
                     let user = users[userKey];
 
-                    // format payload
+                    // format payload: look for custom formatter or use default
                     if (PayloadFormatter.hasOwnProperty(payload.type)) {
                         payload = PayloadFormatter[payload.type](payload, user);
                     } else {
                         payload = PayloadFormatter.default(payload, user);
                     }
 
-                    let deviceKey = payload.device + '-' + payload.type;
+                    let deviceKey = payload.source + '-' + payload.type;
 
                     //write to keys's history
                     admin.database().ref('/history/' + payload.webhookKey + '/' + deviceKey).push(payload).catch(error => {
@@ -99,6 +100,9 @@ exports.webhook = functions.https.onRequest((req, res) => {
                                     }
                                 }
                             });
+                            if ( tokensToRemove.length > 0 ){
+                                console.log('Removing ' + tokensToRemove.length + ' tokens.');
+                            }
                             return Promise.all(tokensToRemove);
                         });
 
@@ -167,9 +171,7 @@ const PayloadFormatter = {
 PayloadFormatter.trip = function (payload, user) {
 
     // Run default formatter
-    payload = PayloadFormatter.default;
-
-
+    payload = PayloadFormatter.default(payload, user);
 
     return payload;
 }
@@ -183,8 +185,8 @@ const NotificationTemplate = {
 const NotificationFormatter = {
     default: function (payload, user) {
         let notif = NotificationTemplate;
-        notif.notification.title = payload.displayName;
-        notif.notification.body = payload.description;
+        notif.notification.title = payload.title;
+        notif.notification.body = payload.body;
 
         return notif;
     }
@@ -206,13 +208,13 @@ let user = {
 
 let event = {
     webhookKey: "",
-    device: "",
-    type: "",
-    value: "",
     date: "",
-    displayName: "",
-    description: "",
-    extra: {
+    source: "",
+    type: "",
+    title: "",
+    body: "",
+    value: "",
+    data: {
         "key" : "value",
         "key" : "value"
         ...
