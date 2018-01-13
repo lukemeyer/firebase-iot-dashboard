@@ -18,6 +18,18 @@ a.active, a:active, a:focus, a:hover {
 i.material-icons {
     font-size: inherit;
 }
+.tooltip {
+    cursor: default;
+}
+.channel .column {
+    padding: .4rem;
+}
+.eventCard .card-header {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+/*
 #frame .navbar {
     margin: 1em;
 }
@@ -81,9 +93,7 @@ i.material-icons {
 .sensor .value .action i {
     font-size: .8em;
 }
-.tooltip {
-    cursor: default;
-}
+
 .action.history {
     cursor: pointer;
     opacity: .25;
@@ -91,3 +101,4 @@ i.material-icons {
 .action.history:hover {
     opacity: 1;
 }
+*/

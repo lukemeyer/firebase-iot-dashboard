@@ -1,9 +1,193 @@
-let functions = require('firebase-functions');
+const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+
+const express = require("express")
+
 const shortid = require('shortid');
 const chrono = require('chrono-node');
 
 admin.initializeApp(functions.config().firebase);
+
+/**
+ * Firestore Triggers
+ */
+// Handle user creation
+exports.userCreated = functions.firestore
+    .document('Users/{userId}')
+    .onCreate(event => {
+        // Create a batch for all the writes
+        let createUserBatch = admin.firestore().batch();
+
+        // Get data off the event
+        const data = event.data.data();
+        const userId = event.params.userId;
+
+        // Define a new user
+        const userTemplate = {
+            displayName: "",            // Name to show in UI
+            uid: userId,                // Firebase generated user id
+            channels: {},                 // Channels known to this user
+            timezone: '',               // Timezone to use when it is uncertain
+            notificationTokens: [],     // Registered push notification tokens
+            notificationPreferences: [] // Which devices trigger a notification
+        };
+
+        let user = Object.assign({},userTemplate,data);
+
+        // Set up a channel for this user
+        const firstChannelID = shortid.generate();
+        user.channels[firstChannelID] = {
+            visible: true
+        };
+
+        // Write the user
+        createUserBatch.set(event.data.ref, user);
+
+        // Define a the channel in channels document
+        let channelDoc = {
+            name: user.displayName + "'s Channel", // Group name to show in UI
+            description: "Automatically created channel.",
+            viewers: {}, // Map of users that can view this channel
+            latest: {} // Map containing the last event from each source
+        };
+        channelDoc.viewers[userId] = true;
+
+        // Write the channel
+        createUserBatch.set(admin.firestore().doc('Channels/' + firstChannelID), channelDoc);
+
+        // Define a new key for the user/channel
+        const firstChannelKey = shortid.generate();
+
+        let keyDoc = {
+            owner: userId, // User id of the owner of this key
+            channel: firstChannelID, // The channel this key applies to
+            permissions: {
+                writeEvents: true, // Can this key be used to write events to the channel
+            },
+            isEnabled: true // Is this key active
+        };
+
+        // Write the key document
+        createUserBatch.set(admin.firestore().doc('AccessKeys/' + firstChannelKey), keyDoc);
+
+        // Do the batch write
+        return createUserBatch.commit();
+});
+
+/**
+ * HTTP Triggers
+ */
+
+ // Use express for routing
+exports.echo = functions.https.onRequest(
+    express().get("/echo/:first?/:second?/:third?", (req, res) => {
+        //set no cache
+        res.set('Cache-Control', 'no-cache, max-age=0, s-maxage=0');
+    
+        let echo = {
+            function: "echo",
+            method: req.method,
+            headers: req.headers,
+            url: req.url,
+            params: req.params,
+            body: req.body,
+            hasThird: req.params.third !== undefined
+        }
+    
+        res.status(200).send(JSON.stringify(echo));
+    })
+);
+
+exports.api = functions.https.onRequest(
+    express().all("/api/:apiKey?/webhook", (req, res) => {
+    //set no cache
+    res.set('Cache-Control', 'no-cache, max-age=0, s-maxage=0');
+
+    //check for json payload
+    let type = req.headers['content-type'];
+    if (!type || type.indexOf('application/json') !== 0) {
+        return res.status(400).send("Invalid content-type");
+    }
+
+    let payload = req.body;
+
+    // Get the apiKey from params or payload
+    let activeKey;
+    try {
+        activeKey = req.params.apiKey || payload.apiKey;
+        if ( activeKey === undefined ){
+            throw "Key not found";
+        }
+    } catch (err) {
+        console.error('Missing apiKey.');
+        return res.status(400).send("Missing API key");
+    }
+
+    // Check event key
+    admin.firestore().collection('AccessKeys').doc(activeKey)
+    .get()
+    .then(keyDocSnapshot => {
+        if (!keyDocSnapshot.exists) {
+            console.log('Key not found: ' + activeKey);
+            res.status(400).send("API key not found.");
+        } else {
+            // Key found
+            const key = keyDocSnapshot.data();
+            if ( key.isEnabled === true && key.permissions.writeEvents === true ){
+                // Get the owner of the key
+                admin.firestore().collection('Users').doc(key.owner)
+                .get()
+                .then( userDocumentSnapshot => {
+                    const user = userDocumentSnapshot.data();
+                    // Format the payload for saving
+                    // format payload: look for custom formatter or use default
+                    if (PayloadFormatter.hasOwnProperty(payload.type)) {
+                        payload = PayloadFormatter[payload.type](payload, user);
+                    } else {
+                        payload = PayloadFormatter.default(payload, user);
+                    }
+
+                    const topicKey = payload.topic;
+                    
+                    // Write to channel's event collection
+                    admin.firestore().collection('Channels').doc(key.channel).collection('Events')
+                    .add(payload)
+                    .then( documentReference => {
+                        // Write to channel's latest events
+                        let latestUpdate =  {};
+                        latestUpdate["latest." +topicKey] = payload;
+
+                        admin.firestore().collection('Channels').doc(key.channel)
+                        .update(latestUpdate)
+                        .then( writeResult => {
+                            res.send(200);
+                        })
+                        .catch(error => {
+                            console.log("Write latest failed.",error);
+                            res.send(400);
+                        });
+                    })
+                    .catch(error => {
+                        console.log("Write event failed.",error);
+                        res.send(400);
+                    });
+                })
+                .catch(error => {
+                    console.log("User not found",error);
+                    res.send(400);
+                });
+            } else {
+                console.log('API key is not authorized', err);
+                res.status(400).send("API key is not authorized");
+            }
+        }
+    })
+    .catch(err => {
+        console.log('Error getting document', err);
+        res.send(400);
+    });
+})
+);
 
 exports.ingest = functions.https.onRequest((req, res) => {
     var type = req.headers['content-type'];
@@ -26,6 +210,9 @@ exports.ingest = functions.https.onRequest((req, res) => {
 });
 
 exports.webhook = functions.https.onRequest((req, res) => {
+    //set no cache
+    res.set('Cache-Control', 'no-cache, max-age=0, s-maxage=0');
+    
     //check for json payload
     let type = req.headers['content-type'];
     if (!type || type.indexOf('application/json') !== 0) {
@@ -133,6 +320,23 @@ exports.generateWebhookKey = functions.database.ref('/users/{uid}')
         return event.data.ref.child('webhookKey').set(shortid.generate());
     });
 
+function createAccessKey (name, channel, owner){
+    // Define a new key for the user/channel
+    const newKey = shortid.generate();
+    
+    let keyDoc = {
+        owner: owner.uid, // User id of the owner of this key
+        channel: channel, // The channel this key applies to
+        permissions: {
+            writeEvents: true, // Can this key be used to write events to the channel
+        },
+        isEnabled: true // Is this key active
+    };
+
+    // Write the key document
+    admin.firestore().doc('AccessKeys/' + newKey).set(keyDoc);
+}
+
 function buildEventPathFromEvent(event) {
     let segments = ['/events', event.location_id, event.name];
     return segments.join('/');
@@ -156,7 +360,7 @@ function normalizeDate(dateString, timezone) {
         newDate[0].start.assign('timezoneOffset', referenceDate[0].start.get('timezoneOffset'));
     }
 
-    return newDate !== null ? newDate[0].start.date().toJSON() : dateString;
+    return newDate !== null ? newDate[0].start.date() : dateString;
 }
 
 const PayloadFormatter = {
@@ -185,8 +389,8 @@ const NotificationTemplate = {
 const NotificationFormatter = {
     default: function (payload, user) {
         let notif = NotificationTemplate;
-        notif.notification.title = payload.title;
-        notif.notification.body = payload.body;
+        notif.notification.title = payload.subject;
+        notif.notification.body = payload.message;
 
         return notif;
     }
@@ -194,27 +398,28 @@ const NotificationFormatter = {
 
 /*
 let user = {
-    displayName: "",
-    uid: "",
-    webhookKey: "",
-    timezone: 'America/Indianapolis',
-    notificationTokens: {
+    displayName: "", // Name to show in UI
+    uid: "", // Firebase generated user id
+    groups: [], // Which event groups are owned/visible
+    timezone: 'America/Indianapolis', // Timezone to use when it is uncertain
+    notificationTokens: { // Registered push notification tokens
         {token}: 'true'
     },
-    notificationPreferences: {
+    notificationPreferences: { // Which devices trigger a notification
         "{deviceKey}": "once|every"
     }
 }
 
 let event = {
-    webhookKey: "",
+    apiKey: "",
     date: "",
-    source: "",
-    type: "",
-    title: "",
-    body: "",
+    topic: "",
+    topicType: "",
+    subject: "",
+    message: "",
     value: "",
-    data: {
+    valueType: "",
+    meta: {
         "key" : "value",
         "key" : "value"
         ...

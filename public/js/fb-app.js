@@ -20,26 +20,13 @@ function signin() {
 firebase.auth().onAuthStateChanged(function (user) {
     if (user) {
         // User is signed in.
+        Datastore.init(user);
 
         //Keep track of connection status
         let connectionDBref = firebase.database().ref(".info/connected");
 
         connectionDBref.on('value', function (snapshot) {
             Datastore.Status.Connected = snapshot.val() === true;
-        });
-        
-        // Get user record from firebase DB and check for location id, route to user config if not found, store user on datastore if found
-        firebase.database().ref('/users/' + user.uid).once('value', function (snapshot) {
-            let fbUser = snapshot.val();
-            if ( fbUser !== null && fbUser.hasOwnProperty('location_id') && fbUser.location_id !== null ){
-                Datastore.User = fbUser;
-                m.route.set('/status');
-            } else {
-                Datastore.User = {'displayName': user.displayName, 'uid': user.uid};
-                firebase.database().ref('/users/' + user.uid).set(Datastore.User).then(function() {
-                    m.route.set('/profile');
-                });
-            }
         });
 
     } else {

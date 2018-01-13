@@ -15,36 +15,163 @@ const mdIcons = {
     'presence': 'account_box',
     'switch': 'lightbulb_outline',
     'temperature': 'ac_unit',
-    'lock': 'lock'
+    'lock': 'lock',
+    'smartthings-contact': 'flip',
+    'smartthings-motion': 'visibility',
+    'smartthings-presence': 'account_box',
+    'smartthings-switch': 'lightbulb_outline',
+    'smartthings-temperature': 'ac_unit',
+    'smartthings-lock': 'lock'
 }
 
 // Model
 let Datastore = {
+    db: null,
+    init: function(user){
+        Datastore.db = firebase.firestore();
+        // Get user record, send to status or user config
+        Datastore.db.collection('Users').doc(user.uid).get()
+        .then(function(doc){
+            if ( doc.exists ){
+                // Found user
+                console.log("User successfully loaded.");
+                Datastore.User = doc.data();
+                m.route.set('/status');
+            } else {
+                // First login, store user to DB
+                Datastore.User = {'displayName': user.displayName, 'uid': user.uid};
+
+                doc.set(Datastore.User)
+                .then(function() {
+                    console.log("User successfully saved.");
+                    m.route.set('/profile');
+                })
+                .catch(function(error) {
+                    console.error("Error creating user in firestore: ", error);
+                });
+            }
+            // Refresh notification token
+            saveToken();
+
+            // Set up connections
+            Datastore.AccessKeyFunctions.populate();
+            Datastore.ChannelFunctions.populate();
+        })
+        .catch(function(error){
+            console.error("Error retrieving user: ", error);
+        });
+    },
     Status: {
         Connected: false
     },
-    User: {
-        location_id: null
-    },
+    User: {},
     UserFunctions: {
-        setLocationId: function (value) {
-            Datastore.User.location_id = value;
-        },
         setTimezone: function (value) {
             // Validate
             try {
                 new Date().toLocaleString("en-US", { timeZone: value, timeZoneName: "long" });
                 Datastore.User.timezone = value;
-                // Store to firebase
-                firebase.database().ref('users/' + Datastore.User.uid + '/timezone').set(value);
-
+                // Store to db
+                firebase.firestore().collection('Users').doc(Datastore.User.uid).set({timezone: value}, {merge:true})
+                .then(function(){ console.log('Timezone saved as: ' + value); })
+                .catch(function(err){ console.error('Error saving timezone:',err)});
             } catch (e) {
                 console.log(e);
             }
 
         },
         setNotificationPreference: function (deviceId, preference) {
-            firebase.database().ref('users/' + Datastore.User.uid + '/notificationPreferences/' + deviceId).set(preference);
+            let notificationUpdate = {};
+            notificationUpdate['notificationPreferences.' + deviceId] = preference;
+
+            firebase.firestore().collection('Users').doc(Datastore.User.uid).update(notificationUpdate)
+            .then(function(){ console.log('Notification saved: '); })
+            .catch(function(err){ console.error('Error saving notification:',err)});
+        }
+    },
+    AccessKeys:{},
+    AccessKeyFunctions: {
+        populate: function(){
+            if ( Datastore.User.uid !== undefined ){
+                // Get users AccessKeys, then Channels, then latest events
+                Datastore.db.collection('AccessKeys').where('owner','==',Datastore.User.uid)
+                .onSnapshot(function(snapshot){
+                    console.log('Got ' + snapshot.docChanges.length + ' AccessKeys changes');
+                    snapshot.docChanges.forEach(function(change){
+                        if (change.type === 'added' || change.type === 'modified' ){
+                            Datastore.AccessKeys[change.doc.id] = change.doc.data();
+                        }
+                        if ( change.type === 'removed' ){
+                            delete Datastore.AccessKeys[change.doc.id];
+                        }
+                    });
+                    // Redraw after commiting changes
+                    m.redraw();
+                });
+            }
+        }
+    },
+    Channels: {},
+    ChannelFunctions :{
+        populate: function(){
+            // Get Channels the user can view
+            Datastore.db.collection('Channels').where('viewers.' + Datastore.User.uid,'==',true)
+            .onSnapshot(function(snapshot){
+                console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
+                snapshot.docChanges.forEach(function(change){
+                    if (change.type === 'added' || change.type === 'modified' ){
+                        Datastore.Channels[change.doc.id] = change.doc.data();
+                    }
+                    if ( change.type === 'removed' ){
+                        delete Datastore.Channels[change.doc.id];
+                    }
+                });
+                // Redraw after commiting changes
+                m.redraw();
+            });
+            
+        }
+    },
+    Topics: {},
+    TopicFunctions: {
+        subscribe: function(channelId, topicId){
+            if ( Datastore.Topics[channelId] === undefined ){
+                Datastore.Topics[channelId] = {};
+            }
+            if ( Datastore.Topics[channelId][topicId] === undefined ){
+                Datastore.Topics[channelId][topicId] = {
+                    recent: {},
+                    unsubscribe: null
+                };
+            }
+
+            let topicRoot = Datastore.Topics[channelId][topicId];
+
+            // Get Channels the user can view
+            topicRoot.unsubscribe = Datastore.db.collection('Channels').doc(channelId).collection('Events').where('topic','==',topicId)
+            .orderBy('date','desc')
+            .limit(10)
+            .onSnapshot(function(snapshot){
+                console.log('Got ' + snapshot.docChanges.length + ' topic changes');
+                snapshot.docChanges.forEach(function(change){
+                    if (change.type === 'added' || change.type === 'modified' ){
+                        topicRoot.recent[change.doc.id] = change.doc.data();
+                    }
+                    if ( change.type === 'removed' ){
+                        delete topicRoot.recent[change.doc.id];
+                    }
+                });
+                // Redraw after commiting changes
+                m.redraw();
+            });
+        },
+        unsubscribe: function(channelId, topicId){
+            try {
+                Datastore.Topics[channelId][topicId].unsubscribe();
+            } catch (error) {
+                console.error("Error unsubscribing:", error);
+            }
+
         }
     }
 }
@@ -106,29 +233,6 @@ const LoginBase = {
 // Base component for User Route
 const ProfileBase = {
     timezoneInput: Datastore.User.timezone !== null ? Datastore.User.timezone : '',
-    oncreate: function (vnode) {
-        if (typeof firebase === 'undefined') {
-            m.route.set('/loading');
-        } else {
-            saveToken();
-            firebase.messaging().onMessage(function (payload) {
-                console.log('Notifications received.', payload);
-            });
-            vnode.state.dbRef = firebase.database().ref('/users/' + Datastore.User.uid);
-
-            vnode.state.dbRef.once('value', function (snapshot) {
-                Datastore.User = snapshot.val();
-                m.redraw();
-            });
-        }
-    },
-    onremove: function (vnode) {
-        if (typeof vnode.state.dbRef !== 'undefined') {
-            // Clean up db ref
-            vnode.state.dbRef.off();
-        }
-
-    },
     view: function (vnode) {
         return m('#profile.frame-body',
             m('.panel', [
@@ -163,88 +267,138 @@ const ProfileBase = {
     }
 }
 
-// Base component for Status Route
-const StatusBase = {
-    events: [],
-    oncreate: function (vnode) {
-        if (typeof firebase === 'undefined') {
-            m.route.set('/loading');
-        } else {
-            let location_id = Datastore.User.location_id;
-            let statusPath = 'status/' + location_id;
-
-            vnode.state.dbRef = firebase.database().ref(statusPath);
-
-            vnode.state.events = [];
-
-            vnode.state.dbRef.orderByChild('name').on('child_added', function (snapshot) {
-                var event = snapshot.val();
-                vnode.state.events[snapshot.key] = event;
-                m.redraw();
-            });
-
-            vnode.state.dbRef.on('child_changed', function (snapshot) {
-                let event = snapshot.val();
-                vnode.state.events[snapshot.key] = event;
-                m.redraw();
-            });
-        }
-    },
-    onremove: function (vnode) {
-        if (typeof vnode.state.dbRef !== 'undefined') {
-            // Clean up db ref
-            vnode.state.dbRef.off();
-        }
-    },
+// List of channels
+const ChannelList = {
     view: function (vnode) {
-        let children = [];
-        for (let key in vnode.state.events) {
-            if (vnode.state.events.hasOwnProperty(key)) {
-                let element = vnode.state.events[key];
-                children.push(m('.flex-list-item', m(StatusIndicator, element)));
+        let channels = [];
+        for (let key in vnode.attrs.channels) {
+            if (vnode.attrs.channels.hasOwnProperty(key)) {
+                let element = vnode.attrs.channels[key];
+                channels.push(m(Channel, {channelId: key, channel: element}));
             }
         }
 
-        return m('#status.flex-list', children);
+        return m('div', channels);
     }
 }
 
-const StatusHistory = {
+// Individual channel
+const Channel = {
+    view: function (vnode) {
+        let channel = vnode.attrs.channel;
+        let children = [];
+        children.push(m('h1', channel.name));
+        let panels = [];
+
+        let sortedKeys = Object.keys(channel.latest).sort(function (a,b) {
+            //return channel.latest[a].subject > channel.latest[b].subject ? -1 : 1;
+            if ( channel.latest[a].topicType == channel.latest[b].topicType ){
+                return channel.latest[a].subject < channel.latest[b].subject ? -1 : 1;
+            } else {
+                return channel.latest[a].topicType < channel.latest[b].topicType ? -1 : 1;
+            }
+        })
+
+        //for (let key in channel.latest) {
+        sortedKeys.forEach( function(key){
+            if (channel.latest.hasOwnProperty(key)) {
+                let element = channel.latest[key];
+                panels.push(m(EventCard, {event: element, channelId: vnode.attrs.channelId} ));
+            }
+        });
+
+        children.push(m('.container.grid-xl.channel',m('.columns',panels)));
+
+        return m('div', children);
+    }
+}
+/*
+<div class="card">
+  <div class="card-image">
+    <img src="img/osx-el-capitan.jpg" class="img-responsive">
+  </div>
+  <div class="card-header">
+    <div class="card-title h5">Microsoft</div>
+    <div class="card-subtitle text-gray">Software and hardware</div>
+  </div>
+  <div class="card-body">
+    Empower every person and every organization on the planet to achieve more.
+  </div>
+  <div class="card-footer">
+    <button class="btn btn-primary">Do</button>
+  </div>
+</div>
+*/
+// Card showing a single event and the option to view history for events in the same topic
+const EventCard = {
+    view: function (vnode) {
+        let event = vnode.attrs.event;
+
+        let valueElement = null;
+        if ( event.valueType == 'image' ) {
+            valueElement = m('.card-image',
+                m('img.img-responsive', {'src': event.value})
+            );
+        } else {
+            valueElement = m('.card-body',
+                m('.h1.text-center', formatValue(event))
+            );
+        }
+
+        let headerElement = m('.card-header.d-flex',[
+            m('.card-title',[
+                m('div.h3', event.subject),
+                m('.tooltip', { 'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma") }, moment(event.date).fromNow())
+            ]),
+            m('div.h1', m('i.material-icons.type-icon', mdIcons[event.topicType]))
+            
+        ]);
+
+        let card = m('.column.col-xs-12.col-md-6.col-lg-4.col-3',
+            m('.card.eventCard',[
+                valueElement,
+                headerElement,
+                m('.card-body',m(EventHistory, {channelId: vnode.attrs.channelId, event: event}))
+            ])
+        );
+
+        return card;
+    }
+}
+
+
+const EventHistory = {
     history: [],
     oncreate: function (vnode) {
-        vnode.state.dbRef = firebase.database().ref('/events/' + vnode.attrs.location_id + '/' + vnode.attrs.name)
-            .orderByChild('id').equalTo(vnode.attrs.id)
-            .limitToLast(5);
-        vnode.state.history = [];
-
-        vnode.state.dbRef.on('child_added', function (snapshot) {
-            var event = snapshot.val();
-            vnode.state.history.unshift(event);
-            m.redraw();
-        });
-
-        vnode.state.dbRef.on('child_removed', function (snapshot) {
-            var event = snapshot.val();
-            delete vnode.state.history[snapshot.key];
-            m.redraw();
-        });
+        Datastore.TopicFunctions.subscribe(vnode.attrs.channelId,vnode.attrs.event.topic);
+    },
+    onremove: function(vnode){
+        Datastore.TopicFunctions.unsubscribe(vnode.attrs.channelId,vnode.attrs.event.topic);
     },
     view: function (vnode) {
+        let history = {};
+        try {
+            history = Datastore.Topics[vnode.attrs.channelId][vnode.attrs.event.topic].recent;
+        } catch (error) {
+            
+        }
+        
         var children = [];
 
-        if (vnode.attrs.name === 'temperature') {
+        if (vnode.attrs.eventvalueType === 'temperature' || vnode.attrs.event.valueType === 'temperature-status') {
             let tempValues = [];
-            for (var i = 0; i < vnode.state.history.length; i++) {
-                tempValues.unshift(vnode.state.history[i].value);
-                children.unshift(m(HistoryIndicator, vnode.state.history[i]));
-            }
+            //for (var i = 0; i < history.length; i++) {
+            for ( let i in history ){
+                tempValues.unshift(history[i].value);
+                children.push(m(HistoryIndicator, history[i]));
+            };
             children.unshift(m('tr', m('td', { 'colspan': 2 }, m(SparkLine, { points: tempValues }))));
         } else {
 
-            for (var i = 0; i < vnode.state.history.length; i++) {
-                children.push(m(HistoryIndicator, vnode.state.history[i]));
-
-            }
+            //for (var i = 0; i < history.length; i++) {
+            for( let i in history ){
+                children.push(m(HistoryIndicator, history[i]));
+            };
         }
 
         return m('table.history.table.table-striped.table-hover', children);
@@ -279,7 +433,7 @@ const StatusIndicator = {
 
         if (vnode.state.showHistory) {
             classes.push('withHistory');
-            children.push(m(StatusHistory, vnode.attrs));
+            children.push(m(EventHistory, vnode.attrs));
         }
 
         return m('#' + vnode.attrs.id + classes.join('.'), children);
@@ -358,15 +512,25 @@ function valueClasses(event) {
 
 function formatValue(event) {
     var formatted = event.value;
-    switch (event.name) {
+    switch (event.valueType) {
         case 'presence':
+        case 'presence-status':
             formatted = event.value === 'present' ? 'present' : 'away';
             break;
         case 'temperature':
+        case 'temperature-status':
             formatted = Math.round(event.value) + '°';
             break;
+        case 'number-percent':
+        case 'humidity-status':
+            formatted = m('div',[
+                m('div.h3.text-center', event.value + '%'),
+                m('.bar',
+                    m('.bar-item', {'style': {'width': event.value + '%'}})
+                )
+            ]);
+            break;
     }
-
 
     return formatted;
 }
@@ -411,7 +575,7 @@ m.route(appRoot, '/loading', {
     },
     '/status': {
         render: function () {
-            return m(Frame, m(StatusBase))
+            return m(Frame, m(ChannelList, {channels: Datastore.Channels}))
         },
     },
     '/login': {
