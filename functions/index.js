@@ -29,7 +29,7 @@ exports.userCreated = functions.firestore
             channels: {},                 // Channels known to this user
             timezone: '',               // Timezone to use when it is uncertain
             notificationTokens: [],     // Registered push notification tokens
-            notificationPreferences: [] // Which devices trigger a notification
+            notificationPreferences: {} // Which devices trigger a notification
         };
 
         let user = Object.assign({},userTemplate,data);
@@ -72,6 +72,26 @@ exports.userCreated = functions.firestore
 
         // Do the batch write
         return createUserBatch.commit();
+});
+
+// Handle AccessKey,Channel create requests
+exports.requestHandler = functions.firestore
+.document('Requests/{userId}/Requests/{requestId}')
+.onCreate(event => {
+    const userId = event.params.userId;
+    const request = event.data.data();
+
+    // Do the reqested action
+    switch (request.type) {
+        case 'Channel':
+            return createChannel(userId);
+        break;
+        case 'AccessKey':
+            return createAccessKey(request.channelId, userId);    
+        break;
+    }
+
+    //TODO: Delete request if successful
 });
 
 /**
@@ -171,6 +191,8 @@ exports.api = functions.https.onRequest(
                         console.log("Write event failed.",error);
                         res.send(400);
                     });
+
+                    sendNotifications(payload, key.channel, topicKey);
                 })
                 .catch(error => {
                     console.log("User not found",error);
@@ -188,6 +210,59 @@ exports.api = functions.https.onRequest(
     });
 })
 );
+
+function sendNotifications (event, channelId, topic) {
+    // Get all users that subscribe to this channel+topic
+    admin.firestore().collection('Users').where('notificationPreferences.' + (channelId + '-' + topic) + '.enabled', '==', true)
+    .get()
+    .then( querySnapshot => {
+        querySnapshot.docs.forEach(function(userDocSnapshot){
+            const user = userDocSnapshot.data();
+            const frequency = user.notificationPreferences[channelId + '-' + topic].frequency;
+            
+            // Build notification content
+            console.log('Notifying ' + user.displayName + ' ' + frequency + ' for ' + channelId + '-' + topic);
+
+            // Notification details.
+            let notif = NotificationTemplate;
+            if (NotificationFormatter.hasOwnProperty(event.topicType)) {
+                notif = NotificationFormatter[event.topicType](event, user);
+            } else {
+                notif = NotificationFormatter.default(event, user);
+            }
+
+            // Get all tokens to send to
+            // Listing all tokens.
+            const tokens = Object.keys(user.notificationTokens);
+            console.log('There are', tokens.length, 'tokens to send notifications to.');
+
+            // Send notifications to all tokens.
+            admin.messaging().sendToDevice(tokens, notif).then(response => {
+                // For each message, check if there was an error.
+                const tokensToRemove = [];
+                response.results.forEach((result, index) => {
+                    const error = result.error;
+                    if (error) {
+                        console.error('Failure sending notification to', tokens[index], error);
+                        // Cleanup the tokens who are not registered anymore.
+                        if (error.code === 'messaging/invalid-registration-token' ||
+                            error.code === 'messaging/registration-token-not-registered') {
+                            tokensToRemove.push(userDocSnapshot.ref.update('notificationTokens.' + tokens[index], admin.firestore.FieldValue.delete()));
+                        }
+                    }
+                });
+                if ( tokensToRemove.length > 0 ){
+                    console.log('Removing ' + tokensToRemove.length + ' tokens.');
+                }
+                return Promise.all(tokensToRemove);
+            });
+
+            if ( frequency === 'once' ){
+                return userDocSnapshot.ref.update('notificationPreferences.' + (channelId + '-' + topic), admin.firestore.FieldValue.delete())
+            }
+        });
+    })
+}
 
 exports.ingest = functions.https.onRequest((req, res) => {
     var type = req.headers['content-type'];
@@ -320,21 +395,42 @@ exports.generateWebhookKey = functions.database.ref('/users/{uid}')
         return event.data.ref.child('webhookKey').set(shortid.generate());
     });
 
-function createAccessKey (name, channel, owner){
+function createAccessKey (channel, ownerId){
     // Define a new key for the user/channel
     const newKey = shortid.generate();
     
     let keyDoc = {
-        owner: owner.uid, // User id of the owner of this key
-        channel: channel, // The channel this key applies to
-        permissions: {
-            writeEvents: true, // Can this key be used to write events to the channel
+        'owner': ownerId, // User id of the owner of this key
+        'channel': channel, // The channel this key applies to
+        'permissions': {
+            'writeEvents': true, // Can this key be used to write events to the channel
         },
-        isEnabled: true // Is this key active
+        'isEnabled': true // Is this key active
     };
 
     // Write the key document
-    admin.firestore().doc('AccessKeys/' + newKey).set(keyDoc);
+    return admin.firestore().doc('AccessKeys/' + newKey).set(keyDoc);
+}
+
+function createChannel (ownerId, name, description) {
+    // Define a the channel in channels document
+    let channelDoc = {
+        name: name || "New Channel", // Group name to show in UI
+        description: description || "Channel Description",
+        viewers: {}, // Map of users that can view this channel
+        latest: {} // Map containing the last event from each source
+    };
+    channelDoc.viewers[ownerId] = true;
+
+    // Write the channel and create an access key
+    return admin.firestore().collection('Channels').add(channelDoc)
+    .then(function(docRef) {
+        console.log("Channel created ", docRef.id);
+        return createAccessKey(docRef.id,ownerId);
+    })
+    .catch(function(error) {
+        console.error("Error creating channel: ", error);
+    });
 }
 
 function buildEventPathFromEvent(event) {
@@ -387,11 +483,12 @@ const NotificationTemplate = {
     }
 }
 const NotificationFormatter = {
-    default: function (payload, user) {
+    default: function (event, user) {
         let notif = NotificationTemplate;
-        notif.notification.title = payload.subject;
-        notif.notification.body = payload.message;
-
+        notif.notification.title = event.subject;
+        notif.notification.body = event.message;
+        notif.notification.clickAction = functions.config().hosting.url;
+        notif.notification.icon = functions.config().hosting.url + '/img/icon.png';
         return notif;
     }
 }

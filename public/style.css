@@ -8,6 +8,12 @@ Warning: #F5890F
 Error: #F52D0F
 
 */
+body {
+    background-color: #222;
+    color: #fff;
+
+    font-family: 'Source Sans Pro', sans-serif;
+}
 a {
     color: inherit;
 }
@@ -21,13 +27,106 @@ i.material-icons {
 .tooltip {
     cursor: default;
 }
-.channel .column {
+.table tr:last-child td {
+    border-bottom: none;
+}
+.input-group .input-group-addon {
+    background: #444;
+    padding: .35rem 1rem;
+}
+
+#frame {
+    padding: 0 .4rem;
+}
+.channel-list .column {
     padding: .4rem;
+}
+.eventCard {
+    position: relative;
+    background-color: #222;
+    border-color: #333;
+    padding-top: 1rem;
+}
+.eventCard .event-icon {
+    position: absolute;
+    top: .4rem;
+    left: .4rem;
+    font-size: 1.25em;
+}
+.eventCard .event-expand {
+    position: absolute;
+    top: .4rem;
+    right: .4rem;
+    font-size: 1.25em;
+}
+.eventCard .event-menu {
+    background: #333;
+}
+.eventCard .event-menu td {
+    padding: .3rem;
+    text-transform: uppercase;
 }
 .eventCard .card-header {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
+}
+.eventCard .card-title {
+    font-size: 1.25em;
+}
+.eventCard .event-value {
+    font-weight: 200;
+    text-transform: uppercase;
+    font-size: 2em;
+    line-height: 1.2em;
+}
+.eventCard .history .event-value {
+    font-size: 1em;
+}
+.eventCard .event-value.positive,
+.eventCard .event-value.active {
+    color: #82C2B6;
+}
+.eventCard .event-value.positive .bar-item {
+    background: #82C2B6;
+}
+.eventCard .event-value.negative {
+    color: #F5890F;
+}
+.eventCard .event-value.negative .bar-item {
+    background: #F5890F;
+}
+.eventCard .event-value.inactive {
+    opacity: .5;
+}
+.eventCard .event-value.temperature--10,
+.eventCard .event-value.temperature-0,
+.eventCard .event-value.temperature-10,
+.eventCard .event-value.temperature-20,
+.eventCard .event-value.temperature-30 {
+    color: #08538C;
+}
+.eventCard .event-value.temperature-40 {
+    color: #187CA1;
+}
+.eventCard .event-value.temperature-50 {
+    color: #35B4BD;
+}
+.eventCard .event-value.temperature-60,
+.eventCard .event-value.temperature-70 {
+    color: #D2E352;
+}
+.eventCard .event-value.temperature-80 {
+    color: #FA9D07;
+}
+.eventCard .event-value.temperature-90,
+.eventCard .event-value.temperature-100,
+.eventCard .event-value.temperature-110 {
+    color: #B81616;
+}
+.text-small {
+    font-size: .5em;
+    line-height: 1.2em;
 }
 /*
 #frame .navbar {

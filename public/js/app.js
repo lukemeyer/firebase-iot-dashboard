@@ -21,7 +21,13 @@ const mdIcons = {
     'smartthings-presence': 'account_box',
     'smartthings-switch': 'lightbulb_outline',
     'smartthings-temperature': 'ac_unit',
-    'smartthings-lock': 'lock'
+    'smartthings-lock': 'lock',
+    'smartthings-illuminance': 'wb_sunny',
+    'battery_status': 'battery_std',
+    'smartthings-humidity': 'opacity',
+    'smartthings-button': 'radio_button_checked',
+    'smartthings-energy': 'power',
+    'wunderground_weather': 'cloud'
 }
 
 // Model
@@ -51,11 +57,12 @@ let Datastore = {
                 });
             }
             // Refresh notification token
-            saveToken();
+            Datastore.UserFunctions.registerNotifications();
 
             // Set up connections
-            Datastore.AccessKeyFunctions.populate();
-            Datastore.ChannelFunctions.populate();
+            Datastore.UserFunctions.subscribe();
+            Datastore.AccessKeyFunctions.subscribe();
+            Datastore.ChannelFunctions.subscribe();
         })
         .catch(function(error){
             console.error("Error retrieving user: ", error);
@@ -66,6 +73,24 @@ let Datastore = {
     },
     User: {},
     UserFunctions: {
+        subscribe: function(){
+            if ( Datastore.User.uid !== undefined ){
+                // Get user's AccessKeys
+                Datastore.UserFunctions.unsubscribe = Datastore.db.collection('Users').doc(Datastore.User.uid)
+                .onSnapshot(function(snapshot){
+                    let user = snapshot.data();
+                    console.log('User updated ' + user.displayName);
+                    if ( snapshot.exists ){
+                        Datastore.User = user;
+                    } else {
+                        console.log('User deleted????');
+                    }
+                    // Redraw after commiting changes
+                    m.redraw();
+                });
+            }
+        },
+        unsubscribe: null,
         setTimezone: function (value) {
             // Validate
             try {
@@ -80,44 +105,111 @@ let Datastore = {
             }
 
         },
-        setNotificationPreference: function (deviceId, preference) {
+        setNotificationPreference: function (channelId, topicId, frequency) {
             let notificationUpdate = {};
-            notificationUpdate['notificationPreferences.' + deviceId] = preference;
+            let notificationProps = {};
+            if ( frequency === 'never' ){
+                notificationProps = firebase.firestore.FieldValue.delete();
+            } else {
+                notificationProps = {
+                    'frequency': frequency,
+                    'enabled' : true
+                }
+            }
+            
+            notificationUpdate['notificationPreferences.' + channelId + '-' + topicId] = notificationProps;
 
             firebase.firestore().collection('Users').doc(Datastore.User.uid).update(notificationUpdate)
             .then(function(){ console.log('Notification saved: '); })
             .catch(function(err){ console.error('Error saving notification:',err)});
+        },
+        registerNotifications: function(){
+            firebase.messaging().getToken().then(function (currentToken) {
+                if (currentToken) {
+                    //firebase.database().ref('users/' + Datastore.User.uid + '/notificationTokens/' + currentToken).set(true);
+                    firebase.firestore().collection('Users').doc(Datastore.User.uid).update('notificationTokens.' + currentToken, true)
+                    .then(function(){ console.log('Notification token saved: '); })
+                    .catch(function(err){ console.error('Error saving notification token:',err)});
+                } else {
+                    // Requests permission to send notifications to this browser.
+                    //console.log('Requesting permission...');
+                    firebase.messaging().requestPermission().then(function () {
+                        //console.log('Notification permission granted.');
+                        Datastore.UserFunctions.registerNotifications();
+                    }).catch(function (err) {
+                        //console.error('Unable to get permission to notify.', err);
+                    });
+                }
+            }).catch(function (err) {
+                console.error('Unable to get messaging token.', err);
+                if (err.code === 'messaging/permission-default') {
+                    //this.fcmErrorContainer.innerText = 'You have not enabled notifications on this browser. To enable notifications reload the page and allow notifications using the permission dialog.';
+                } else if (err.code === 'messaging/notifications-blocked') {
+                    //this.fcmErrorContainer.innerHTML = 'You have blocked notifications on this browser. To enable notifications follow these instructions: <a href="https://support.google.com/chrome/answer/114662?visit_id=1-636150657126357237-2267048771&rd=1&co=GENIE.Platform%3DAndroid&oco=1">Android Chrome Instructions</a><a href="https://support.google.com/chrome/answer/6148059">Desktop Chrome Instructions</a>';
+                }
+            });
         }
     },
     AccessKeys:{},
     AccessKeyFunctions: {
-        populate: function(){
+        subscribe: function(){
             if ( Datastore.User.uid !== undefined ){
-                // Get users AccessKeys, then Channels, then latest events
-                Datastore.db.collection('AccessKeys').where('owner','==',Datastore.User.uid)
+                // Get user's AccessKeys
+                Datastore.AccessKeyFunctions.unsubscribe = Datastore.db.collection('AccessKeys').where('owner','==',Datastore.User.uid)
                 .onSnapshot(function(snapshot){
-                    console.log('Got ' + snapshot.docChanges.length + ' AccessKeys changes');
+                    //console.log('Got ' + snapshot.docChanges.length + ' AccessKeys changes');
                     snapshot.docChanges.forEach(function(change){
+                        let key = change.doc.data();
+                        //console.log('Key ' + change.doc.id + ' ' + change.type + ' in channel ' + key.channel);
                         if (change.type === 'added' || change.type === 'modified' ){
-                            Datastore.AccessKeys[change.doc.id] = change.doc.data();
+                            if ( Datastore.AccessKeys[key.channel] == undefined ){
+                                Datastore.AccessKeys[key.channel] = {};
+                            }
+                            Datastore.AccessKeys[key.channel][change.doc.id] = key;
                         }
                         if ( change.type === 'removed' ){
-                            delete Datastore.AccessKeys[change.doc.id];
+                            delete Datastore.AccessKeys[key.channel][change.doc.id];
+                            if ( Object.keys(Datastore.AccessKeys[key.channel]).length < 1 ){
+                                delete Datastore.AccessKeys[key.channel];
+                            }
                         }
                     });
                     // Redraw after commiting changes
                     m.redraw();
                 });
             }
+        },
+        unsubscribe: null,
+        create : function(channel){
+            if ( Datastore.User.uid !== undefined ){
+                // Build channel request
+                let request = {
+                    type: 'AccessKey',
+                    channelId: channel
+                };
+                // Store to db
+                Datastore.db.collection('Requests').doc(Datastore.User.uid).collection('Requests').add(request)
+                .then(function(){ console.log('New AccessKey requested'); })
+                .catch(function(err){ console.error('Error requesting a new AccessKey',err)});
+            }
+        },
+        update : function(keyId, properties) {
+            Datastore.db.collection('AccessKeys').doc(keyId).update(properties)
+            .then(function(){
+                console.log('AccessKey updated');
+            })
+            .catch(function(err){
+                console.error('Error updating AccessKey',err)
+            })
         }
     },
     Channels: {},
     ChannelFunctions :{
-        populate: function(){
+        subscribe: function(){
             // Get Channels the user can view
-            Datastore.db.collection('Channels').where('viewers.' + Datastore.User.uid,'==',true)
+            Datastore.ChannelFunctions.unsubscribe = Datastore.db.collection('Channels').where('viewers.' + Datastore.User.uid,'==',true)
             .onSnapshot(function(snapshot){
-                console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
+                //console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
                 snapshot.docChanges.forEach(function(change){
                     if (change.type === 'added' || change.type === 'modified' ){
                         Datastore.Channels[change.doc.id] = change.doc.data();
@@ -130,6 +222,28 @@ let Datastore = {
                 m.redraw();
             });
             
+        },
+        unsubscribe: null,
+        create : function(){
+            if ( Datastore.User.uid !== undefined ){
+                // Build channel request
+                let request = {
+                    type: 'Channel'
+                };
+                // Store to db
+                Datastore.db.collection('Requests').doc(Datastore.User.uid).collection('Requests').add(request)
+                .then(function(){ console.log('New Channel requested'); })
+                .catch(function(err){ console.error('Error requesting a new Channel',err)});
+            }
+        },
+        update : function(channelId, properties) {
+            Datastore.db.collection('Channels').doc(channelId).update(properties)
+            .then(function(){
+                console.log('Channel updated');
+            })
+            .catch(function(err){
+                console.error('Error updating Channel',err)
+            })
         }
     },
     Topics: {},
@@ -230,18 +344,37 @@ const LoginBase = {
     }
 }
 
+// Base component for Status Route
+const StatusBase = {
+    view: function (vnode) {
+        return m('.container.grid-xl',[
+            m('.columns',[
+                m(ChannelList, {itemComponent: Channel, channels: Datastore.Channels})
+            ])
+        ]);
+    }
+}
+
 // Base component for User Route
 const ProfileBase = {
     timezoneInput: Datastore.User.timezone !== null ? Datastore.User.timezone : '',
     view: function (vnode) {
-        return m('#profile.frame-body',
+        return m('.container.grid-sm',[
+            m('h2','Profile'),
+            m('h2','Channels'),
+            m('.columns',[
+                m('div.column.col-12',
+                    m('button.btn.btn-primary.float-right',{ onclick: function () { Datastore.ChannelFunctions.create(); } },'Add Channel')
+                ),
+                m('div.column.col-12',
+                    m(ChannelList, {itemComponent: ChannelEditor, channels: Datastore.Channels})
+                )
+            ])
+        ]);
+/*         return m('#profile.frame-body',
             m('.panel', [
                 m('.panel-header', m('.panel-title', Datastore.User.displayName)),
                 m('.panel-body', [
-                    m('dl', [
-                        m('dt', 'WebHook Key'),
-                        m('dd', Datastore.User.webhookKey)
-                    ]),
                     m('dl', [
                         m('dt', 'Time Zone'),
                         m('dd', [
@@ -263,7 +396,7 @@ const ProfileBase = {
                         ])
                     ])
                 ]),
-            ]));
+            ])); */
     }
 }
 
@@ -274,11 +407,14 @@ const ChannelList = {
         for (let key in vnode.attrs.channels) {
             if (vnode.attrs.channels.hasOwnProperty(key)) {
                 let element = vnode.attrs.channels[key];
-                channels.push(m(Channel, {channelId: key, channel: element}));
+                channels.push(m(vnode.attrs.itemComponent, {'key': key, 'channelId': key, 'channel': element}));
+                channels.push(m('.channel-divider.column.col-12',m('.divider')));
             }
         }
+        // Pop the last divider off the channel list
+        channels.pop();
 
-        return m('div', channels);
+        return m('.columns.channel-list',channels);
     }
 }
 
@@ -287,7 +423,7 @@ const Channel = {
     view: function (vnode) {
         let channel = vnode.attrs.channel;
         let children = [];
-        children.push(m('h1', channel.name));
+        children.push(m('.channel-header.column.col-12',m('h1', channel.name)));
         let panels = [];
 
         let sortedKeys = Object.keys(channel.latest).sort(function (a,b) {
@@ -307,58 +443,217 @@ const Channel = {
             }
         });
 
-        children.push(m('.container.grid-xl.channel',m('.columns',panels)));
+        children.push(panels);
 
-        return m('div', children);
+        return children;
     }
 }
-/*
-<div class="card">
-  <div class="card-image">
-    <img src="img/osx-el-capitan.jpg" class="img-responsive">
-  </div>
-  <div class="card-header">
-    <div class="card-title h5">Microsoft</div>
-    <div class="card-subtitle text-gray">Software and hardware</div>
-  </div>
-  <div class="card-body">
-    Empower every person and every organization on the planet to achieve more.
-  </div>
-  <div class="card-footer">
-    <button class="btn btn-primary">Do</button>
-  </div>
-</div>
-*/
+
+// Individual channel
+const ChannelEditor = {
+    oninit: function(vnode) {
+        vnode.state.props = {};
+        vnode.state.props.name = vnode.attrs.channel.name;
+        vnode.state.props.description = vnode.attrs.channel.name;
+    },
+    view: function (vnode) {
+        let props = vnode.state.props;
+        let channel = vnode.attrs.channel;
+        let channelId = vnode.attrs.channelId;
+
+        let children = [
+            m('.channel-header.column.col-12',m('h1', channel.name)),
+            m('.channel-editForm.column.col-12',
+                m('.form',[
+                    m('.form-group', [
+                        m('label.form-label','Name'),
+                        m('input.form-input',{
+                            type: 'text',
+                            placeholder: 'Name',
+                            value: props.name,
+                            onchange: function(e) {
+                                props.name = e.target.value;
+                            }
+                        }),
+                    ]),
+                    m('.form-group', [
+                        m('label.form-label','Description'),
+                        m('input.form-input',{
+                            type: 'text',
+                            placeholder: 'Description',
+                            value: props.description,
+                            onchange: function(e) {
+                                props.description = e.target.value;
+                            }
+                        }),
+                    ]),
+                    m('.form-group.clearfix', [
+                        m('button.btn.btn-primary.float-right',{
+                            onclick: function (e) {
+                                e.preventDefault();
+                                Datastore.ChannelFunctions.update(channelId,props);
+                            }
+                    },'Save Channel'),
+                    ]),
+                    m('.form-group', [
+                        m('h3','Keys'),
+                    ]),
+                    m('.form-group.clearfix', [
+                        m('button.btn.btn-primary.float-right',{
+                            onclick: function(e){
+                                e.preventDefault();
+                                Datastore.AccessKeyFunctions.create(channelId);
+                            }
+                        },'Add key'),
+                    ]),
+                    m(KeyList, {itemComponent: KeyEditor, keys: Datastore.AccessKeys[channelId]})
+                ])
+            )
+        ];
+
+        return children;
+    }
+}
+
+// List of Access Keys
+const KeyList = {
+    view: function (vnode) {
+        let keys = [];
+        for (let key in vnode.attrs.keys) {
+            if (vnode.attrs.keys.hasOwnProperty(key)) {
+                let element = vnode.attrs.keys[key];
+                keys.push(m(vnode.attrs.itemComponent, {'key': key, 'keyId': key, 'accessKey': element}));
+            }
+        }
+        return m('.columns.key-list',keys);
+    }
+}
+
+// Individual key
+const KeyEditor = {
+    oninit: function(vnode) {
+        vnode.state.keyProps = {};
+        vnode.state.keyProps.name = vnode.attrs.accessKey.name;
+        vnode.state.keyProps.isEnabled = vnode.attrs.accessKey.isEnabled;
+    },
+    view: function (vnode) {
+        //let key = vnode.attrs.accessKey;
+        let keyId = vnode.attrs.keyId;
+        
+        let keyProps = vnode.state.keyProps;
+
+        let fields = 
+        m('.key-editForm.column.col-12',
+            m('.form',[
+                m('.form-group', [
+                    m('.input-group',[
+                        m('span.input-group-addon', keyId),
+                        m('input.form-input[type="text"][placeholder="Name"]',{
+                            value: keyProps.name,
+                            onchange: function(e) {
+                                keyProps.name = e.target.value;
+                            }
+                        }),
+                    ]),
+                ]),
+                m('.form-group', [
+                    m('label.form-switch', [
+                        m('input[type="checkbox"]', {
+                            checked: keyProps.isEnabled,
+                            onclick: function(){
+                                keyProps.isEnabled = !keyProps.isEnabled;
+                            },
+                            onchange: function(e) {
+                                keyProps.isEnabled = e.currentTarget.checked;
+                            }
+                        }),
+                        m('i.form-icon'),
+                        m('span','Enabled')
+                    ]),
+                ]),
+                m('.form-group.clearfix', [
+                    m('button.btn.btn-primary.float-right',{
+                        onclick: function (e) {
+                            e.preventDefault();
+                            Datastore.AccessKeyFunctions.update(keyId,keyProps);
+                        }
+                    },'Update')
+                ]),
+            ])
+        )
+
+
+        return fields;
+    }
+}
+
 // Card showing a single event and the option to view history for events in the same topic
 const EventCard = {
     view: function (vnode) {
         let event = vnode.attrs.event;
+        let channelId = vnode.attrs.channelId;
+        let topicId = event.topic;
+
+        let notificationPreference = Datastore.User.notificationPreferences[channelId + '-' + topicId] !== undefined ? 
+            Datastore.User.notificationPreferences[channelId + '-' + topicId].frequency : 
+            'never';
 
         let valueElement = null;
-        if ( event.valueType == 'image' ) {
+        if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
             valueElement = m('.card-image',
                 m('img.img-responsive', {'src': event.value})
             );
         } else {
-            valueElement = m('.card-body',
-                m('.h1.text-center', formatValue(event))
+            valueElement = m('.card-body.event-value' + valueClasses(event),
+                m('.text-center', formatValue(event))
             );
         }
 
         let headerElement = m('.card-header.d-flex',[
             m('.card-title',[
-                m('div.h3', event.subject),
-                m('.tooltip', { 'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma") }, moment(event.date).fromNow())
+                m('span', event.subject),
+                m('.text-small.tooltip', { 'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma") }, moment(event.date).fromNow())
             ]),
-            m('div.h1', m('i.material-icons.type-icon', mdIcons[event.topicType]))
-            
+            m('.event-icon', m('i.material-icons.type-icon', mdIcons[event.topicType])),
+            m('.event-expand', m('i.material-icons.type-icon',
+                { onclick: function () { vnode.state.showMenu = !vnode.state.showMenu }}, 
+                vnode.state.showMenu ? 'expand_less' : 'expand_more'))
         ]);
 
-        let card = m('.column.col-xs-12.col-md-6.col-lg-4.col-3',
+        let menuElement = m('.card-body',
+            m('table.event-menu.table.table-striped.table-hover', [
+                m('tr',
+                    { onclick: function () {
+                        vnode.state.showHistory = !vnode.state.showHistory;
+                        vnode.state.showMenu = !vnode.state.showHistory;
+                    
+                    }},
+                    m('td', (vnode.state.showHistory ? 'Hide' : 'Show') + ' History')
+                ),
+                m('tr',
+                    { onclick: function () {
+                        const frequencies = ['never','once', 'always'];
+                        let index = frequencies.indexOf(notificationPreference);
+                        let nextPref = frequencies[++index % frequencies.length]
+                        
+
+                        Datastore.UserFunctions.setNotificationPreference(channelId,topicId, nextPref);
+                    }}, 
+                    m('td', 'Notify: ' + (notificationPreference === undefined ? 'never' : notificationPreference) )
+                ),
+            ])
+        );
+
+        let historyElement = m('.card-body',m(EventHistory, {channelId: vnode.attrs.channelId, event: event}));
+
+        let mobileCols = vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
+
+        let card = m('.channel-event.column.' + mobileCols + '.col-md-6.col-lg-4.col-3',
             m('.card.eventCard',[
+                vnode.state.showMenu ? menuElement : null, // menu visibility
                 valueElement,
                 headerElement,
-                m('.card-body',m(EventHistory, {channelId: vnode.attrs.channelId, event: event}))
+                vnode.state.showHistory ? historyElement : null // history visibility
             ])
         );
 
@@ -445,7 +740,7 @@ const HistoryIndicator = {
         var eventDate = moment(vnode.attrs.date);
         var children = [
             m('td.time', eventDate.isSame(moment(), 'day') ? eventDate.format('LT') : eventDate.calendar()),
-            m('td.value ' + valueClasses(vnode.attrs), formatValue(vnode.attrs))
+            m('td.value.event-value ' + valueClasses(vnode.attrs), formatValue(vnode.attrs))
         ];
 
         return m('tr.record', children);
@@ -486,62 +781,124 @@ const SparkLine = {
 function valueClasses(event) {
     var classes = [];
 
-    switch (event.name) {
+    switch (event.valueType) {
         case 'motion':
+        case 'motion-status':
             classes.push(event.value === 'active' ? 'active' : 'inactive');
             break;
         case 'presence':
+        case 'presence-status':
             classes.push(event.value === 'present' ? 'active' : 'inactive');
             break;
         case 'contact':
+        case 'contact-status':
             classes.push(event.value === 'open' ? 'negative' : 'positive');
             break;
         case 'lock':
+        case 'lock-status':
             classes.push(event.value === 'locked' ? 'positive' : 'negative');
             break;
         case 'switch':
+        case 'switch-status':
             classes.push(event.value === 'on' ? 'active' : 'inactive');
             break;
-        case 'temperature':
+        case 'number-percent':
+            if ( event.topicType === 'battery_status'){
+                classes.push(event.value < 15 ? 'negative' : 'positive');
+            }
+            break;
+        case 'humidity-status':
+            classes.push(event.value < 25 || event.value > 45 ? 'negative' : 'positive');
+            break;
+        case 'temperature':        
+        case 'temperature-status':
             var round = Math.floor(parseFloat(event.value) / 10) * 10;
             classes.push('temperature-' + round);
             break;
+        case 'illuminance-status':
+            classes.push(event.value > 50 ? 'positive' : 'inactive');
+            break;
     }
-    return classes.join(' ');
+
+    return "." + classes.join('.');
 }
 
 function formatValue(event) {
-    var formatted = event.value;
+    var formatted = event.value
+
+    var val = isNumeric(event.value) ? Math.floor(event.value * 100) / 100 : event.value;
+    var unit = "";
+
+    if ( event.hasOwnProperty('meta') && event.meta.hasOwnProperty('unit') ){
+        unit = event.meta.unit;
+    }
+
+    if ( unit !== '' && unit !== null ){
+        formatted = m('span',[
+            m('span',val),
+            m('sup.text-small',' ' + unit)
+        ]);
+    } else {
+        formatted = m('span',val);
+    }
+
     switch (event.valueType) {
         case 'presence':
         case 'presence-status':
             formatted = event.value === 'present' ? 'present' : 'away';
             break;
+        case 'motion':
+        case 'motion-status':
+            formatted = event.value === 'active' ? 'motion' : 'no motion';
+            break;
         case 'temperature':
         case 'temperature-status':
-            formatted = Math.round(event.value) + '°';
+            formatted = m('span',[
+                m('span',Math.round(event.value) + '° '),
+                m('sup.text-small',unit)
+            ]);
+            break;
+        case 'image_url':
+            formatted = m('a',{'href': event.value, 'target': '_blank'},[
+                m('div', m('i.material-icons.type-icon', 'image'))
+            ]);
             break;
         case 'number-percent':
         case 'humidity-status':
             formatted = m('div',[
-                m('div.h3.text-center', event.value + '%'),
-                m('.bar',
+                m('div.te.text-center', event.value + '%'),
+                m('.bar.bar-sm',
                     m('.bar-item', {'style': {'width': event.value + '%'}})
                 )
             ]);
             break;
     }
 
+    if ( event.topicType === 'wunderground_weather' ){
+        formatted = m('.text-small',event.message);
+    }
+
     return formatted;
 }
+
+function isNumeric(n) {
+    return !isNaN(parseFloat(n)) && isFinite(n);
+  }
 
 // Saves the token to the database if available. If not request permissions.
 let saveToken = function () {
     firebase.messaging().getToken().then(function (currentToken) {
         if (currentToken) {
-            firebase.database().ref('users/' + Datastore.User.uid + '/notificationTokens/' + currentToken).set(true);
+            //firebase.database().ref('users/' + Datastore.User.uid + '/notificationTokens/' + currentToken).set(true);
         } else {
-            requestPermission();
+            // Requests permission to send notifications to this browser.
+            //console.log('Requesting permission...');
+            firebase.messaging().requestPermission().then(function () {
+                //console.log('Notification permission granted.');
+                saveToken();
+            }).catch(function (err) {
+                //console.error('Unable to get permission to notify.', err);
+            });
         }
     }).catch(function (err) {
         console.error('Unable to get messaging token.', err);
@@ -550,17 +907,6 @@ let saveToken = function () {
         } else if (err.code === 'messaging/notifications-blocked') {
             //this.fcmErrorContainer.innerHTML = 'You have blocked notifications on this browser. To enable notifications follow these instructions: <a href="https://support.google.com/chrome/answer/114662?visit_id=1-636150657126357237-2267048771&rd=1&co=GENIE.Platform%3DAndroid&oco=1">Android Chrome Instructions</a><a href="https://support.google.com/chrome/answer/6148059">Desktop Chrome Instructions</a>';
         }
-    });
-};
-
-// Requests permission to send notifications on this browser.
-let requestPermission = function () {
-    //console.log('Requesting permission...');
-    firebase.messaging().requestPermission().then(function () {
-        //console.log('Notification permission granted.');
-        saveToken();
-    }).catch(function (err) {
-        //console.error('Unable to get permission to notify.', err);
     });
 };
 
@@ -575,7 +921,7 @@ m.route(appRoot, '/loading', {
     },
     '/status': {
         render: function () {
-            return m(Frame, m(ChannelList, {channels: Datastore.Channels}))
+            return m(Frame, m(StatusBase))
         },
     },
     '/login': {
