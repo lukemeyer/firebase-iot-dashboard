@@ -600,9 +600,16 @@ const EventCard = {
 
         let valueElement = null;
         if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
-            valueElement = m('.card-image',
+            valueElement = [m('.card-image',
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
                 m('img.img-responsive', {'src': event.value})
-            );
+            ),
+            m('.modal' + (vnode.state.showModal ? '.active' : ''),
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
+                [m('.modal-overlay'),
+                    m('.modal-container',m('img.img-responsive', {'src': event.value}))]
+            )
+        ];
         } else {
             valueElement = m('.card-body.event-value' + valueClasses(event),
                 m('.text-center', formatValue(event))
@@ -625,7 +632,7 @@ const EventCard = {
                 m('tr',
                     { onclick: function () {
                         vnode.state.showHistory = !vnode.state.showHistory;
-                        vnode.state.showMenu = !vnode.state.showHistory;
+                        vnode.state.showMenu = false;
                     
                     }},
                     m('td', (vnode.state.showHistory ? 'Hide' : 'Show') + ' History')
