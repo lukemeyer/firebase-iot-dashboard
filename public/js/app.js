@@ -33,6 +33,7 @@ const mdIcons = {
 // Model
 let Datastore = {
     db: null,
+    RuntimePrefs: {},
     init: function(user){
         Datastore.db = firebase.firestore();
         // Get user record, send to status or user config
@@ -148,6 +149,14 @@ let Datastore = {
                     //this.fcmErrorContainer.innerHTML = 'You have blocked notifications on this browser. To enable notifications follow these instructions: <a href="https://support.google.com/chrome/answer/114662?visit_id=1-636150657126357237-2267048771&rd=1&co=GENIE.Platform%3DAndroid&oco=1">Android Chrome Instructions</a><a href="https://support.google.com/chrome/answer/6148059">Desktop Chrome Instructions</a>';
                 }
             });
+        },
+        setHidden: function(channelId,topicId,isHidden) {
+            let displayUpdate = {};
+            displayUpdate['displayPreferences.' + channelId + '.' + topicId + '.hidden'] = isHidden;
+
+            firebase.firestore().collection('Users').doc(Datastore.User.uid).update(displayUpdate)
+            .then(function(){ console.log('Topic "' + topicId + '" visibility saved.'); })
+            .catch(function(err){ console.error('Error saving topic visibility.',err)});
         }
     },
     AccessKeys:{},
@@ -361,6 +370,9 @@ const ProfileBase = {
     view: function (vnode) {
         return m('.container.grid-sm',[
             m('h2','Profile'),
+            m('button.btn.btn-primary.float-right',
+                { onclick: function () { Datastore.RuntimePrefs.showHidden = !Datastore.RuntimePrefs.showHidden; } },
+                Datastore.RuntimePrefs.showHidden ? 'Hide Hidden Topics' : 'Show Hidden Topics'),
             m('h2','Channels'),
             m('.columns',[
                 m('div.column.col-12',
@@ -426,8 +438,10 @@ const Channel = {
         children.push(m('.channel-header.column.col-12',m('h1', channel.name)));
         let panels = [];
 
+        // Get display prefs for this channel
+        let channelDisplayPrefs = (Datastore.User.displayPreferences && Datastore.User.displayPreferences[vnode.attrs.channelId]) || {};
+
         let sortedKeys = Object.keys(channel.latest).sort(function (a,b) {
-            //return channel.latest[a].subject > channel.latest[b].subject ? -1 : 1;
             if ( channel.latest[a].topicType == channel.latest[b].topicType ){
                 return channel.latest[a].subject < channel.latest[b].subject ? -1 : 1;
             } else {
@@ -435,11 +449,15 @@ const Channel = {
             }
         })
 
-        //for (let key in channel.latest) {
+        // Add latest events to the channel
         sortedKeys.forEach( function(key){
             if (channel.latest.hasOwnProperty(key)) {
                 let element = channel.latest[key];
-                panels.push(m(EventCard, {event: element, channelId: vnode.attrs.channelId} ));
+                let topicDisplayPrefs = channelDisplayPrefs && channelDisplayPrefs[key] || {hidden: false};
+                let topicIsVisible = Datastore.RuntimePrefs.showHidden || !topicDisplayPrefs.hidden;
+                if ( topicIsVisible ){
+                    panels.push(m(EventCard, {key: key, event: element, channelId: vnode.attrs.channelId} ));
+                }
             }
         });
 
@@ -594,6 +612,8 @@ const EventCard = {
         let channelId = vnode.attrs.channelId;
         let topicId = event.topic;
 
+        let isHidden = Datastore.User.displayPreferences && Datastore.User.displayPreferences[channelId] && Datastore.User.displayPreferences[channelId][topicId] && Datastore.User.displayPreferences[channelId][topicId].hidden;
+        
         let notificationPreference = Datastore.User.notificationPreferences[channelId + '-' + topicId] !== undefined ? 
             Datastore.User.notificationPreferences[channelId + '-' + topicId].frequency : 
             'never';
@@ -633,7 +653,6 @@ const EventCard = {
                     { onclick: function () {
                         vnode.state.showHistory = !vnode.state.showHistory;
                         vnode.state.showMenu = false;
-                    
                     }},
                     m('td', (vnode.state.showHistory ? 'Hide' : 'Show') + ' History')
                 ),
@@ -648,6 +667,12 @@ const EventCard = {
                     }}, 
                     m('td', 'Notify: ' + (notificationPreference === undefined ? 'never' : notificationPreference) )
                 ),
+                m('tr',
+                    { onclick: function () {
+                        Datastore.UserFunctions.setHidden(channelId,topicId,!isHidden);
+                    }},
+                    m('td', isHidden ? 'unHide' : 'Hide')
+                ),
             ])
         );
 
@@ -656,7 +681,7 @@ const EventCard = {
         let mobileCols = vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
 
         let card = m('.channel-event.column.' + mobileCols + '.col-md-6.col-lg-4.col-3',
-            m('.card.eventCard',[
+            m('.card.eventCard' + (isHidden ? '.hidden':''),[
                 vnode.state.showMenu ? menuElement : null, // menu visibility
                 valueElement,
                 headerElement,
