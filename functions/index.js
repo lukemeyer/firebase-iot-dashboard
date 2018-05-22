@@ -6,7 +6,7 @@ const express = require("express")
 const shortid = require('shortid');
 const chrono = require('chrono-node');
 
-admin.initializeApp(functions.config().firebase);
+admin.initializeApp();
 
 /**
  * Firestore Triggers
@@ -14,13 +14,13 @@ admin.initializeApp(functions.config().firebase);
 // Handle user creation
 exports.userCreated = functions.firestore
     .document('Users/{userId}')
-    .onCreate(event => {
+    .onCreate((userDocument, context) => {
         // Create a batch for all the writes
         let createUserBatch = admin.firestore().batch();
 
         // Get data off the event
-        const data = event.data.data();
-        const userId = event.params.userId;
+        const data = userDocument.data();
+        const userId = context.params.userId;
 
         // Define a new user
         const userTemplate = {
@@ -41,7 +41,7 @@ exports.userCreated = functions.firestore
         };
 
         // Write the user
-        createUserBatch.set(event.data.ref, user);
+        createUserBatch.set(userDocument.ref, user);
 
         // Define a the channel in channels document
         let channelDoc = {
@@ -77,9 +77,9 @@ exports.userCreated = functions.firestore
 // Handle AccessKey,Channel create requests
 exports.requestHandler = functions.firestore
 .document('Requests/{userId}/Requests/{requestId}')
-.onCreate(event => {
-    const userId = event.params.userId;
-    const request = event.data.data();
+.onCreate((docSnapshot, context) => {
+    const userId = context.params.userId;
+    const request = docSnapshot.data();
 
     // Do the reqested action
     switch (request.type) {
@@ -236,7 +236,24 @@ function sendNotifications (event, channelId, topic) {
             const tokens = Object.keys(user.notificationTokens);
             console.log('There are', tokens.length, 'tokens to send notifications to.');
 
-            // Send notifications to all tokens.
+            for (let i = 0; i < tokens.length; i++) {
+                const token = tokens[i];
+                const notifSingle = Object.assign({}, notif);
+                notifSingle.token = token;
+
+                admin.messaging().send(notifSingle).then(response => {
+                    //console.log('Sent notification to', token);
+                }).catch(error => {
+                    console.error('Failure sending notification to', token, error);
+                        // Cleanup the tokens who are not registered anymore.
+                        if (error.code === 'messaging/invalid-registration-token' ||
+                            error.code === 'messaging/registration-token-not-registered') {
+                            return userDocSnapshot.ref.update('notificationTokens.' + token, admin.firestore.FieldValue.delete());
+                        }
+                });
+            }
+
+/*             // Send notifications to all tokens.
             admin.messaging().sendToDevice(tokens, notif).then(response => {
                 // For each message, check if there was an error.
                 const tokensToRemove = [];
@@ -255,7 +272,7 @@ function sendNotifications (event, channelId, topic) {
                     console.log('Removing ' + tokensToRemove.length + ' tokens.');
                 }
                 return Promise.all(tokensToRemove);
-            });
+            }); */
 
             if ( frequency === 'once' ){
                 return userDocSnapshot.ref.update('notificationPreferences.' + (channelId + '-' + topic), admin.firestore.FieldValue.delete())
@@ -264,7 +281,7 @@ function sendNotifications (event, channelId, topic) {
     })
 }
 
-exports.ingest = functions.https.onRequest((req, res) => {
+/* exports.ingest = functions.https.onRequest((req, res) => {
     var type = req.headers['content-type'];
     if (!type || type.indexOf('application/json') !== 0) {
         return res.send(400);
@@ -282,9 +299,9 @@ exports.ingest = functions.https.onRequest((req, res) => {
         });
     });
 
-});
+}); */
 
-exports.webhook = functions.https.onRequest((req, res) => {
+/* exports.webhook = functions.https.onRequest((req, res) => {
     //set no cache
     res.set('Cache-Control', 'no-cache, max-age=0, s-maxage=0');
     
@@ -381,19 +398,19 @@ exports.webhook = functions.https.onRequest((req, res) => {
         }
     });
 
-});
+}); */
 
-exports.updateLatestFromHistory = functions.database.ref('/history/{webhookKey}/{deviceKey}/{pushID}')
+/* exports.updateLatestFromHistory = functions.database.ref('/history/{webhookKey}/{deviceKey}/{pushID}')
     .onCreate(function (event) {
         //Write event into user's status
         return admin.database().ref('/status/' + event.params.webhookKey + '/' + event.params.deviceKey).set(event.data.val());
-    });
+    }); */
 
-exports.generateWebhookKey = functions.database.ref('/users/{uid}')
+/* exports.generateWebhookKey = functions.database.ref('/users/{uid}')
     .onCreate(function (event) {
         //Write a shortid into the webhookKey propery of new users
         return event.data.ref.child('webhookKey').set(shortid.generate());
-    });
+    }); */
 
 function createAccessKey (channel, ownerId){
     // Define a new key for the user/channel
@@ -478,17 +495,26 @@ PayloadFormatter.trip = function (payload, user) {
 const NotificationTemplate = {
     notification: {
         title: '',
-        body: '',
-        icon: ''
+        body: ''
+    },
+    webpush: {
+        notification: {}, 
     }
 }
 const NotificationFormatter = {
     default: function (event, user) {
         let notif = NotificationTemplate;
+        // Base
         notif.notification.title = event.subject;
         notif.notification.body = event.message;
-        notif.notification.clickAction = functions.config().hosting.url;
-        notif.notification.icon = functions.config().hosting.url + '/img/icon.png';
+
+        // Web Push
+        notif.webpush.notification.click_action = functions.config().hosting.url;
+        notif.webpush.notification.icon = functions.config().hosting.url + '/img/icon.png';
+
+        if ( event.valueType === 'image_url' ){
+            notif.webpush.notification.image = event.value;
+        }
         return notif;
     }
 }
