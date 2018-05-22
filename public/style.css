@@ -24,6 +24,9 @@ a.active, a:active, a:focus, a:hover {
 i.material-icons {
     font-size: inherit;
 }
+.clickable {
+    cursor: pointer;
+}
 .tooltip {
     cursor: default;
 }
@@ -42,6 +45,9 @@ i.material-icons {
     padding: .4rem;
 }
 .eventCard {
+    display: flex;
+    height: 100%;
+    justify-content: center;
     position: relative;
     background-color: #222;
     border-color: #333;
@@ -82,6 +88,7 @@ i.material-icons {
 .eventCard .event-menu td {
     padding: .3rem;
     text-transform: uppercase;
+    cursor: pointer;
 }
 .eventCard .card-header {
     display: flex;
@@ -142,6 +149,9 @@ i.material-icons {
 .eventCard .event-value.temperature-100,
 .eventCard .event-value.temperature-110 {
     color: #B81616;
+}
+.eventCard .history .sparkline text {
+    font-size: 8px;
 }
 .text-small {
     font-size: .5em;

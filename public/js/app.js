@@ -712,14 +712,16 @@ const EventHistory = {
         
         var children = [];
 
-        if (vnode.attrs.eventvalueType === 'temperature' || vnode.attrs.event.valueType === 'temperature-status') {
+        if (vnode.attrs.eventvalueType === 'temperature' || vnode.attrs.event.valueType === 'temperature-status' || vnode.attrs.event.valueType === 'humidity' || vnode.attrs.event.valueType === 'humidity-status') {
             let tempValues = [];
+            let tempLabels = [];
             //for (var i = 0; i < history.length; i++) {
             for ( let i in history ){
                 tempValues.unshift(history[i].value);
+                tempLabels.unshift(formatValue(history[i], true));
                 children.push(m(HistoryIndicator, history[i]));
             };
-            children.unshift(m('tr', m('td', { 'colspan': 2 }, m(SparkLine, { points: tempValues }))));
+            children.unshift(m('tr', m('td', { 'colspan': 2 }, m(SparkLine, { values: tempValues, labels: tempLabels }))));
         } else {
 
             //for (var i = 0; i < history.length; i++) {
@@ -779,31 +781,88 @@ const HistoryIndicator = {
     }
 }
 
+const ImageIconWithModal = {
+    view: function (vnode) {
+        let children = [m('.card-image.clickable',
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
+                m('div',m('i.material-icons.type-icon', 'image')),
+            ),
+            m('.modal' + (vnode.state.showModal ? '.active' : ''),
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
+                [m('.modal-overlay'),
+                    m('.modal-container',m('img.img-responsive', {'src': vnode.attrs.event.value}))]
+            )
+        ];
+
+        return m('div', children);
+    }
+}
+
 const SparkLine = {
     view: function (vnode) {
 
-        let points = vnode.attrs.hasOwnProperty('points') ? vnode.attrs.points.map(function (val, idx) { return 100 - val }) : [5, 10, 15, 10, 5];
+        let points = vnode.attrs.hasOwnProperty('values') ? vnode.attrs.values.map(function (val, idx) { return 100 - val }) : [5, 10, 15, 10, 5];
+        let labels = vnode.attrs.hasOwnProperty('labels') ? vnode.attrs.labels : vnode.attrs.values;
         let interval = 10;
         let svgPoints = '';
         let ymin = Math.min(...points);
         let ymax = Math.max(...points);
+        let markers = [];
         for (var i = 0; i < points.length; i++) {
-            svgPoints += (i * interval) + ',' + points[i] + ' ';
+            let x = (i * interval);
+            let y = points[i];
+            svgPoints += x + ',' + y + ' ';
+            markers.push(null);
         }
-        ymin = ymin - 1;
-        ymax = ymax + 1;
+        let line = m('polyline',
+        {
+            'fill': 'none',
+            'stroke': '#0074d9',
+            'stroke-width': '1',
+            'points': svgPoints
+        });
+        // only show one each min/max markers
+        let hasMax = false;
+        let hasMin = false;
+        for (var i = points.length - 1; i >= 0; i--) {
+            if ( hasMax && hasMin) {
+                break;
+            }
+            if ( points[i] === ymin && !hasMin ){
+                let x = (i * interval);
+                let y = points[i];
+                markers.push(m('text', {
+                    'x': x,
+                    'y': y,
+                    'dx': 1,
+                    'dy': -2,
+                    'fill': '#ffffff',
+                    'text-anchor': 'middle'
+                },labels[i]));
+                hasMin = true;
+            }
+            if ( points[i] === ymax && !hasMax ){
+                let x = (i * interval);
+                let y = points[i];
+                markers.push(m('text', {
+                    'x': x,
+                    'y': y,
+                    'dx': 1,
+                    'dy': 10,
+                    'fill': '#ffffff',
+                    'text-anchor': 'middle'
+                },labels[i]));
+                hasMax = true;
+            }
+        }
+        ymin = ymin - 12;
+        ymax = ymax + 12;
 
-        let svgViewbox = '0 ' + ymin + ' ' + (interval * (points.length - 1)) + ' ' + (ymax - ymin);
+        let svgViewbox = '-' + interval + ' ' + ymin + ' ' + (interval * (points.length + 1)) + ' ' + (ymax - ymin);
         if (points.length > 0) {
             return m('.sparkline', m('svg',
                 { 'viewBox': svgViewbox },
-                m('polyline',
-                    {
-                        'fill': 'none',
-                        'stroke': '#0074d9',
-                        'stroke-width': '1',
-                        'points': svgPoints
-                    })));
+                [line].concat(markers)));
         } else {
             return '';
         }
@@ -825,6 +884,10 @@ function valueClasses(event) {
         case 'contact':
         case 'contact-status':
             classes.push(event.value === 'open' ? 'negative' : 'positive');
+            break;
+        case 'water':
+        case 'water-status':
+            classes.push(event.value === 'dry' ? 'positive' : 'negative');
             break;
         case 'lock':
         case 'lock-status':
@@ -855,23 +918,27 @@ function valueClasses(event) {
     return "." + classes.join('.');
 }
 
-function formatValue(event) {
+function formatValue(event, simple) {
     var formatted = event.value
 
     var val = isNumeric(event.value) ? Math.floor(event.value * 100) / 100 : event.value;
     var unit = "";
 
-    if ( event.hasOwnProperty('meta') && event.meta.hasOwnProperty('unit') ){
+    if ( event.hasOwnProperty('meta') && event.meta.hasOwnProperty('unit') && event.meta.unit !== null ){
         unit = event.meta.unit;
     }
 
     if ( unit !== '' && unit !== null ){
-        formatted = m('span',[
-            m('span',val),
-            m('sup.text-small',' ' + unit)
-        ]);
+        if ( simple === true ){
+            formatted = val + unit;
+        } else {
+            formatted = m('span',[
+                m('span',val),
+                m('sup.text-small',' ' + unit)
+            ]);
+        }
     } else {
-        formatted = m('span',val);
+        formatted = simple === true ? val : m('span',val);
     }
 
     switch (event.valueType) {
@@ -885,29 +952,39 @@ function formatValue(event) {
             break;
         case 'temperature':
         case 'temperature-status':
-            formatted = m('span',[
-                m('span',Math.round(event.value) + '° '),
-                m('sup.text-small',unit)
-            ]);
+            if ( simple === true ){
+                formatted = Math.round(event.value) + '° ' + unit;
+            } else {
+                formatted = m('span',[
+                    m('span',Math.round(event.value) + '° '),
+                    m('sup.text-small',unit)
+                ]);
+            }
             break;
         case 'image_url':
-            formatted = m('a',{'href': event.value, 'target': '_blank'},[
-                m('div', m('i.material-icons.type-icon', 'image'))
-            ]);
+            if ( simple === true ){
+                formatted = '[image]';
+            } else {
+                formatted = m(ImageIconWithModal, { event: event });
+            }
             break;
         case 'number-percent':
         case 'humidity-status':
-            formatted = m('div',[
-                m('div.te.text-center', event.value + '%'),
-                m('.bar.bar-sm',
-                    m('.bar-item', {'style': {'width': event.value + '%'}})
-                )
-            ]);
+            if ( simple === true ){
+                formatted = event.value + '%';
+            } else {
+                formatted = m('div',[
+                    m('div.te.text-center', event.value + '%'),
+                    m('.bar.bar-sm',
+                        m('.bar-item', {'style': {'width': event.value + '%'}})
+                    )
+                ]);
+            }
             break;
     }
 
     if ( event.topicType === 'wunderground_weather' ){
-        formatted = m('.text-small',event.message);
+        formatted = simple === true ? event-message : m('.text-small',event.message);
     }
 
     return formatted;
