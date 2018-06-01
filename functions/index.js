@@ -212,29 +212,30 @@ exports.api = functions.https.onRequest(
 );
 
 function sendNotifications (event, channelId, topic) {
+    const tag = channelId + '-' + topic;
     // Get all users that subscribe to this channel+topic
-    admin.firestore().collection('Users').where('notificationPreferences.' + (channelId + '-' + topic) + '.enabled', '==', true)
+    admin.firestore().collection('Users').where('notificationPreferences.' + tag + '.enabled', '==', true)
     .get()
     .then( querySnapshot => {
         querySnapshot.docs.forEach(function(userDocSnapshot){
             const user = userDocSnapshot.data();
-            const frequency = user.notificationPreferences[channelId + '-' + topic].frequency;
+            const frequency = user.notificationPreferences[tag].frequency;
             
             // Build notification content
-            console.log('Notifying ' + user.displayName + ' ' + frequency + ' for ' + channelId + '-' + topic);
+            //console.log('Notifying ' + user.displayName + ' ' + frequency + ' for ' + tag);
 
             // Notification details.
-            let notif = NotificationTemplate;
+            let notif = {};
             if (NotificationFormatter.hasOwnProperty(event.topicType)) {
-                notif = NotificationFormatter[event.topicType](event, user);
+                notif = NotificationFormatter[event.topicType](event, channelId, topic, user);
             } else {
-                notif = NotificationFormatter.default(event, user);
+                notif = NotificationFormatter.default(event, channelId, topic, user);
             }
 
             // Get all tokens to send to
             // Listing all tokens.
             const tokens = Object.keys(user.notificationTokens);
-            console.log('There are', tokens.length, 'tokens to send notifications to.');
+            //console.log('There are', tokens.length, 'tokens to send notifications to.');
 
             for (let i = 0; i < tokens.length; i++) {
                 const token = tokens[i];
@@ -252,27 +253,6 @@ function sendNotifications (event, channelId, topic) {
                         }
                 });
             }
-
-/*             // Send notifications to all tokens.
-            admin.messaging().sendToDevice(tokens, notif).then(response => {
-                // For each message, check if there was an error.
-                const tokensToRemove = [];
-                response.results.forEach((result, index) => {
-                    const error = result.error;
-                    if (error) {
-                        console.error('Failure sending notification to', tokens[index], error);
-                        // Cleanup the tokens who are not registered anymore.
-                        if (error.code === 'messaging/invalid-registration-token' ||
-                            error.code === 'messaging/registration-token-not-registered') {
-                            tokensToRemove.push(userDocSnapshot.ref.update('notificationTokens.' + tokens[index], admin.firestore.FieldValue.delete()));
-                        }
-                    }
-                });
-                if ( tokensToRemove.length > 0 ){
-                    console.log('Removing ' + tokensToRemove.length + ' tokens.');
-                }
-                return Promise.all(tokensToRemove);
-            }); */
 
             if ( frequency === 'once' ){
                 return userDocSnapshot.ref.update('notificationPreferences.' + (channelId + '-' + topic), admin.firestore.FieldValue.delete())
@@ -492,25 +472,47 @@ PayloadFormatter.trip = function (payload, user) {
 
     return payload;
 }
-const NotificationTemplate = {
-    notification: {
-        title: '',
-        body: ''
-    },
-    webpush: {
-        notification: {}, 
+
+class FormattedNotification {
+    constructor() {
+        this.notification = {
+            title: '',
+            body: ''
+        }
+        
+        this.data = {};
+
+        this.webpush =  {
+            notification: {
+                actions:[]
+            },
+            headers: {}
+        }
     }
 }
+
 const NotificationFormatter = {
-    default: function (event, user) {
-        let notif = NotificationTemplate;
+    default: function (event, channelId, topic, user) {
+        const notif = new FormattedNotification();
         // Base
         notif.notification.title = event.subject;
         notif.notification.body = event.message;
 
+        // Data
+        notif.data.tag = channelId + '-' + topic;
+
         // Web Push
         notif.webpush.notification.click_action = functions.config().hosting.url;
         notif.webpush.notification.icon = functions.config().hosting.url + '/img/icon.png';
+        notif.webpush.notification.vibrate = [100, 50, 100, 50, 100, 50, 100];
+
+        notif.webpush.notification.actions =[{
+            "title": "👁️ View",
+            'action': 'view'
+        }];
+
+        notif.webpush.headers.TTL = (60 * 60).toString(); // Live for 1 hour
+        notif.webpush.headers.topic = channelId + '-' + topic; // Collapse to latest message from this topic
 
         if ( event.valueType === 'image_url' ){
             notif.webpush.notification.image = event.value;
