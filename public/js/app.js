@@ -43,7 +43,9 @@ let Datastore = {
                 // Found user
                 console.log("User successfully loaded.");
                 Datastore.User = doc.data();
-                m.route.set('/status');
+                let statusRoute = '/status/';
+                statusRoute += Datastore.RuntimePrefs.statusFocus ? Datastore.RuntimePrefs.statusFocus : 'all';
+                m.route.set(statusRoute);
             } else {
                 // First login, store user to DB
                 Datastore.User = {'displayName': user.displayName, 'uid': user.uid};
@@ -355,8 +357,22 @@ const LoginBase = {
 
 // Base component for Status Route
 const StatusBase = {
+    onupdate: function(vnode) {
+        if ( Datastore.RuntimePrefs.statusFocus !== undefined && Datastore.RuntimePrefs.statusFocus !== null ){
+            const focusElement = document.getElementById(Datastore.RuntimePrefs.statusFocus);
+            if ( focusElement !== null ){
+                setTimeout(() => {
+                    focusElement.scrollIntoView({behavior: "smooth"});
+                    Datastore.RuntimePrefs.statusFocus = null;
+                    m.route.set('/status');
+                }, 500);
+                
+            }
+        }
+    },
     view: function (vnode) {
         return m('.container.grid-xl',[
+            m('a#all'),
             m('.columns',[
                 m(ChannelList, {itemComponent: Channel, channels: Datastore.Channels})
             ])
@@ -383,32 +399,6 @@ const ProfileBase = {
                 )
             ])
         ]);
-/*         return m('#profile.frame-body',
-            m('.panel', [
-                m('.panel-header', m('.panel-title', Datastore.User.displayName)),
-                m('.panel-body', [
-                    m('dl', [
-                        m('dt', 'Time Zone'),
-                        m('dd', [
-                            m('input[type=text]', {
-                                oninput: m.withAttr('value', function (value) { vnode.state.timezoneInput = value }),
-                                value: vnode.state.timezoneInput !== undefined ? vnode.state.timezoneInput : Datastore.User.timezone
-                            }),
-                            m('button', {
-                                onclick: function () {
-                                    vnode.state.timezoneInput = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                                    m.redraw();
-                                }
-                            }, 'Use Timezone from this device'),
-                            m('button', {
-                                onclick: function () {
-                                    Datastore.UserFunctions.setTimezone(vnode.state.timezoneInput);
-                                }
-                            }, 'Save')
-                        ])
-                    ])
-                ]),
-            ])); */
     }
 }
 
@@ -680,7 +670,7 @@ const EventCard = {
 
         let mobileCols = vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
 
-        let card = m('.channel-event.column.' + mobileCols + '.col-md-6.col-lg-4.col-3',
+        let card = m('#' + channelId + '-' + topicId + '.channel-event.column.' + mobileCols + '.col-md-6.col-lg-4.col-3',
             m('.card.eventCard' + (isHidden ? '.hidden':''),[
                 vnode.state.showMenu ? menuElement : null, // menu visibility
                 valueElement,
@@ -1029,7 +1019,14 @@ m.route(appRoot, '/loading', {
         },
     },
     '/status': {
-        render: function () {
+        render: function (vnode) {
+            Datastore.RuntimePrefs.statusFocus = null;
+            return m(Frame, m(StatusBase))
+        },
+    },
+    '/status/:tag': {
+        render: function (vnode) {
+            Datastore.RuntimePrefs.statusFocus = vnode.attrs.tag;
             return m(Frame, m(StatusBase))
         },
     },
