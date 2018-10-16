@@ -328,7 +328,12 @@ function normalizeDate(dateString, timezone) {
 const PayloadFormatter = {
     default: function (payload, user) {
         //Standardize date format
-        payload.date = normalizeDate(payload.date, user.timezone);
+        try {
+            payload.date = normalizeDate(payload.date, user.timezone); //Firestore.TimeStamp.fromDate(normalizeDate(payload.date, user.timezone));
+        } catch (error) {
+            console.error("Error parsing date: " + payload.date + ", current time used instread.")
+            payload.date = payload.date || new Date(); //Firestore.TimeStamp.now();
+        }
 
         return payload;
     }
@@ -338,6 +343,14 @@ PayloadFormatter.trip = function (payload, user) {
 
     // Run default formatter
     payload = PayloadFormatter.default(payload, user);
+
+    return payload;
+}
+
+PayloadFormatter.stringify = function (payload, user) {
+
+    // Run default formatter on the 'stringify' property
+    payload = PayloadFormatter.default(payload.stringify, user);
 
     return payload;
 }
@@ -374,6 +387,7 @@ const NotificationFormatter = {
         notif.webpush.notification.click_action = functions.config().hosting.url;
         notif.webpush.notification.icon = functions.config().hosting.url + '/img/icon.png';
         notif.webpush.notification.vibrate = [100, 50, 100, 50, 100, 50, 100];
+        notif.webpush.notification.tag = channelId + '-' + topic; // Collapse to latest message from this topic
 
         notif.webpush.notification.actions =[{
             "title": "👁️ View",
@@ -381,7 +395,6 @@ const NotificationFormatter = {
         }];
 
         notif.webpush.headers.TTL = (60 * 60).toString(); // Live for 1 hour
-        notif.webpush.headers.topic = channelId + '-' + topic; // Collapse to latest message from this topic
 
         if ( event.valueType === 'image_url' ){
             notif.webpush.notification.image = event.value;
