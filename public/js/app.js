@@ -13,13 +13,13 @@ const mdIcons = {
     'contact': 'flip',
     'motion': 'visibility',
     'presence': 'account_box',
-    'switch': 'lightbulb_outline',
+    'switch': 'offline_bolt',
     'temperature': 'ac_unit',
     'lock': 'lock',
     'smartthings-contact': 'flip',
     'smartthings-motion': 'visibility',
     'smartthings-presence': 'account_box',
-    'smartthings-switch': 'lightbulb_outline',
+    'smartthings-switch': 'offline_bolt',
     'smartthings-temperature': 'ac_unit',
     'smartthings-lock': 'lock',
     'smartthings-illuminance': 'wb_sunny',
@@ -27,7 +27,8 @@ const mdIcons = {
     'smartthings-humidity': 'opacity',
     'smartthings-button': 'radio_button_checked',
     'smartthings-energy': 'power',
-    'wunderground_weather': 'cloud'
+    'smartthings-water': 'waves',
+    'wunderground_weather': 'filter_drama'
 }
 
 // Model
@@ -259,7 +260,8 @@ let Datastore = {
     },
     Topics: {},
     TopicFunctions: {
-        subscribe: function(channelId, topicId){
+        subscribe: function(channelId, topicId, eventLimit){
+            const limit = eventLimit || 10;
             if ( Datastore.Topics[channelId] === undefined ){
                 Datastore.Topics[channelId] = {};
             }
@@ -275,7 +277,7 @@ let Datastore = {
             // Get Channels the user can view
             topicRoot.unsubscribe = Datastore.db.collection('Channels').doc(channelId).collection('Events').where('topic','==',topicId)
             .orderBy('date','desc')
-            .limit(10)
+            .limit(limit)
             .onSnapshot(function(snapshot){
                 console.log('Got ' + snapshot.docChanges.length + ' topic changes');
                 snapshot.docChanges.forEach(function(change){
@@ -629,15 +631,23 @@ const EventCard = {
         let headerElement = m('.card-header.d-flex',[
             m('.card-title',[
                 m('span', event.subject),
-                m('.text-small.tooltip', { 'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma") }, moment(event.date).fromNow())
+                m('.text-small.tooltip', {
+                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma"),
+                    'onclick': function () { vnode.state.showHistory = !vnode.state.showHistory }
+                }, moment(event.date).fromNow()),
+                m('.event-history', m('i.material-icons.type-icon',
+                { onclick: function () { vnode.state.showHistory = !vnode.state.showHistory }}, 
+                'history'))
             ]),
             m('.event-icon', m('i.material-icons.type-icon', mdIcons[event.topicType])),
             m('.event-expand', m('i.material-icons.type-icon',
                 { onclick: function () { vnode.state.showMenu = !vnode.state.showMenu }}, 
-                vnode.state.showMenu ? 'expand_less' : 'expand_more'))
+                'more_vert'))
         ]);
 
-        let menuElement = m('.card-body',
+        let menuElement = m('.modal' + (vnode.state.showMenu ? '.active' : ''),//m('.card-body',
+        [m('.modal-overlay',{ onclick: function () { vnode.state.showMenu = !vnode.state.showMenu }}),
+        m('.modal-container',
             m('table.event-menu.table.table-striped.table-hover', [
                 m('tr',
                     { onclick: function () {
@@ -645,6 +655,13 @@ const EventCard = {
                         vnode.state.showMenu = false;
                     }},
                     m('td', (vnode.state.showHistory ? 'Hide' : 'Show') + ' History')
+                ),
+                m('tr',
+                    { onclick: function () {
+                        vnode.state.showMeta = !vnode.state.showMeta;
+                        vnode.state.showMenu = false;
+                    }},
+                    m('td', (vnode.state.showMeta ? 'Hide' : 'Show') + ' Meta')
                 ),
                 m('tr',
                     { onclick: function () {
@@ -664,18 +681,38 @@ const EventCard = {
                     m('td', isHidden ? 'unHide' : 'Hide')
                 ),
             ])
+        )]
         );
 
-        let historyElement = m('.card-body',m(EventHistory, {channelId: vnode.attrs.channelId, event: event}));
+        //let historyElement = m('.card-body',m(EventHistory, {channelId: vnode.attrs.channelId, event: event}));
 
-        let mobileCols = vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
+        let historyElement = m('.modal' + (vnode.state.showHistory ? '.active' : ''),
+            [m('.modal-overlay',{ onclick: function () { vnode.state.showHistory = !vnode.state.showHistory }}),
+            m('.modal-container',
+                [ m('.modal-header',m('.close.btn.btn-clear.float-right',{ onclick: function () { vnode.state.showHistory = !vnode.state.showHistory }})),
+                m(EventHistory, {channelId: vnode.attrs.channelId, event: event})]
+            )]
+        );
 
-        let card = m('#' + channelId + '-' + topicId + '.channel-event.column.' + mobileCols + '.col-md-6.col-lg-4.col-3',
+        let metaElement = m('.modal' + (vnode.state.showMeta ? '.active' : ''),
+            [m('.modal-overlay',{ onclick: function () { vnode.state.showMeta = !vnode.state.showMeta }}),
+                m('.modal-container',m(KeyValueTable,{event: event}))
+            ]
+        );
+
+        let standardCols = '.col-md-6.col-lg-4.col-3';
+        if ( event.valueType == 'image' || event.valueType == 'image_url' ){
+            standardCols = '.col-md-6.col-lg-4.col-4';
+        }
+        let mobileCols = 'col-xs-6'; //vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
+
+        let card = m('#' + channelId + '-' + topicId + '.channel-event.column.' + mobileCols + standardCols,
             m('.card.eventCard' + (isHidden ? '.hidden':''),[
-                vnode.state.showMenu ? menuElement : null, // menu visibility
                 valueElement,
                 headerElement,
-                vnode.state.showHistory ? historyElement : null // history visibility
+                vnode.state.showMenu ? menuElement : null, // menu visibility
+                vnode.state.showHistory ? historyElement : null, // history visibility
+                vnode.state.showMeta ? metaElement : null
             ])
         );
 
@@ -687,40 +724,54 @@ const EventCard = {
 const EventHistory = {
     history: [],
     oncreate: function (vnode) {
-        Datastore.TopicFunctions.subscribe(vnode.attrs.channelId,vnode.attrs.event.topic);
+        let limit = 10;
+        if (vnode.attrs.event.valueType === 'temperature' ||
+            vnode.attrs.event.valueType === 'temperature-status' ||
+            vnode.attrs.event.valueType === 'humidity' ||
+            vnode.attrs.event.valueType === 'humidity-status') {
+            limit = 24;
+        }
+        
+        Datastore.TopicFunctions.subscribe(vnode.attrs.channelId,vnode.attrs.event.topic, limit);
     },
     onremove: function(vnode){
         Datastore.TopicFunctions.unsubscribe(vnode.attrs.channelId,vnode.attrs.event.topic);
     },
     view: function (vnode) {
+        let showTable = true;
         let history = {};
         try {
             history = Datastore.Topics[vnode.attrs.channelId][vnode.attrs.event.topic].recent;
         } catch (error) {
-            
+            console.error("No recent events found.");
         }
         
         var children = [];
 
-        if (vnode.attrs.eventvalueType === 'temperature' || vnode.attrs.event.valueType === 'temperature-status' || vnode.attrs.event.valueType === 'humidity' || vnode.attrs.event.valueType === 'humidity-status') {
+        if (vnode.attrs.event.valueType === 'temperature' ||
+            vnode.attrs.event.valueType === 'temperature-status' ||
+            vnode.attrs.event.valueType === 'humidity' ||
+            vnode.attrs.event.valueType === 'humidity-status') {
             let tempValues = [];
             let tempLabels = [];
             //for (var i = 0; i < history.length; i++) {
             for ( let i in history ){
                 tempValues.unshift(history[i].value);
                 tempLabels.unshift(formatValue(history[i], true));
-                children.push(m(HistoryIndicator, history[i]));
             };
             children.unshift(m('tr', m('td', { 'colspan': 2 }, m(SparkLine, { values: tempValues, labels: tempLabels }))));
-        } else {
+        } else if ( vnode.attrs.event.valueType === 'image_url' ) {
+            children.unshift(m('tr', m('td', { 'colspan': 2 },m(ImageTimeline,history))));
+            showTable = false;
+        }
 
-            //for (var i = 0; i < history.length; i++) {
+        if ( showTable ) {
             for( let i in history ){
                 children.push(m(HistoryIndicator, history[i]));
             };
         }
 
-        return m('table.history.table.table-striped.table-hover', children);
+        return m('table.history.table.table-striped.table-hover', children.slice(0,9));
     }
 }
 
@@ -785,6 +836,71 @@ const ImageIconWithModal = {
         ];
 
         return m('div', children);
+    }
+}
+
+const KeyValueTable = {
+    view: function (vnode) {
+        let meta = vnode.attrs.event.meta;
+        
+        var children = [];
+
+        for( let key in meta ){
+            let val = meta[key];
+            if ( typeof val === "object" ){
+                val = m(KeyValueTable,{event:{meta:val}});
+            }
+            if ( typeof val === "string" && val.indexOf('http') === 0 ){
+                val = m('a', {href:val}, val)
+            }
+            children.push(m('tr',[
+                m('td.key', key),
+                m('td.value', val)
+            ]));
+        };
+        
+        return m('table.keyvalue.table.table-striped.table-hover', children);
+    }
+}
+
+const ImageTimeline = {
+    oninit : function (vnode){
+        vnode.state.imgIndex = 0;
+        vnode.state.loadedImgs = {};
+    },
+    view: function (vnode){
+        const imageEvents = vnode.attrs;
+        let children = [];
+        let count = 0;
+        for( let i in imageEvents){
+            const event = imageEvents[i];
+            if ( count.toString() == this.imgIndex ){
+                var eventDate = moment(event.date);
+                children.push(
+                    m('p',
+                        (eventDate.isSame(moment(), 'day') ? eventDate.format('LT') : eventDate.calendar()) + (this.loadedImgs[i] === true ? "" : " loading...")
+                    )
+                );
+                children.push(m('img', {
+                    'src': event.value,
+                    'data-key': i,
+                    onload: m.withAttr("data-key", function(v){
+                        vnode.state.loadedImgs[v] = true;
+                    })
+                }));
+            }
+            count++;
+        };
+        children.push(m('input',{
+            'type': 'range',
+            'min': 0,
+            'max': count - 1,
+            //value: this.imgIndex,
+            oninput: m.withAttr("value", function(v){
+                vnode.state.imgIndex = (count - 1) - v;
+            })
+        }));
+        return m('div.imagetimeline',children);
     }
 }
 
