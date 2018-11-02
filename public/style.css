@@ -128,12 +128,64 @@ input[type=range] {
     padding: .35rem 1rem;
 }
 
+.val-positive,
+.val-active {
+    color: #82C2B6;
+}
+.val-positive .bar-item {
+    background: #82C2B6;
+}
+.val-negative {
+    color: #F5890F;
+}
+.val-negative .bar-item {
+    background: #F5890F;
+}
+.val-inactive {
+    opacity: .5;
+}
+.val-temperature--10,
+.val-temperature-0,
+.val-temperature-10,
+.val-temperature-20,
+.val-temperature-30 {
+    color: #08538C;
+}
+.val-temperature-40 {
+    color: #187CA1;
+}
+.val-temperature-50 {
+    color: #35B4BD;
+}
+.val-temperature-60,
+.val-temperature-70 {
+    color: #D2E352;
+}
+.val-temperature-80 {
+    color: #FA9D07;
+}
+.val-temperature-90,
+.val-temperature-100,
+.val-temperature-110 {
+    color: #B81616;
+}
+
 #frame {
     padding: 0 .4rem;
 }
 .channel-list .column {
     padding: .4rem;
 }
+
+#Timeline .tile {
+    padding: .5em;
+    margin-bottom: .5em;
+}
+#Timeline .tile-icon {
+    max-width: 150px;
+}
+
+
 .eventCard {
     display: flex;
     height: 100%;
@@ -211,7 +263,7 @@ input[type=range] {
 .eventCard .history .event-value {
     font-size: 1em;
 }
-.eventCard .event-value.positive,
+/* .eventCard .event-value.positive,
 .eventCard .event-value.active {
     color: #82C2B6;
 }
@@ -251,7 +303,7 @@ input[type=range] {
 .eventCard .event-value.temperature-100,
 .eventCard .event-value.temperature-110 {
     color: #B81616;
-}
+} */
 .eventCard .history,
 .eventCard .keyvalue {
     background-color: #222;

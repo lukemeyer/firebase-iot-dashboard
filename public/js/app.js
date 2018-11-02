@@ -300,6 +300,63 @@ let Datastore = {
             }
 
         }
+    },
+    Timelines: {},
+    TimelineFunctions: {
+        subscribe: function(channels, timelineStart){
+            Datastore.Timelines.channels = {};
+            const startDate = timelineStart || moment().startOf('day').toDate();
+            if ( Datastore.Timelines.days === undefined ){
+                Datastore.Timelines.days = {};
+            }
+
+            let timelineRoot = Datastore.Timelines;
+
+            // Get Channels the user can view
+            for (let i = 0; i < channels.length; i++) {
+                const channelId = channels[i];
+
+                if ( timelineRoot.channels[channelId] === undefined ){
+                    timelineRoot.channels[channelId] = {
+                        docs: {}
+                    };
+                }
+
+                timelineRoot.channels[channelId].unsubscribe = Datastore.db.collection('Channels').doc(channelId).collection('Events')
+                .where('date', '>=', startDate)
+                .orderBy('date','desc')
+                .onSnapshot(function(snapshot){
+                    //console.log('Got ' + snapshot.docChanges.length + ' timeline changes');
+                    snapshot.docChanges.forEach(function(change){
+                        if (change.type === 'added' || change.type === 'modified' ){
+                            const event = change.doc.data();
+                            const isHidden = Datastore.User.displayPreferences && Datastore.User.displayPreferences[channelId] && Datastore.User.displayPreferences[channelId][event.topic] && Datastore.User.displayPreferences[channelId][event.topic].hidden;
+                            if (!isHidden){
+                                timelineRoot.channels[channelId].docs[change.doc.id] = change.doc.data();
+                            }
+                        }
+                        if ( change.type === 'removed' ){
+                            delete timelineRoot.channels[channelId].docs[change.doc.id];
+                        }
+                    });
+                    // Redraw after commiting changes
+                    m.redraw();
+                });
+            } 
+        },
+        unsubscribe: function(){
+            try {
+                for (const channelId in Datastore.Timelines.channels) {
+                    if (Datastore.Timelines.channels.hasOwnProperty(channelId)) {
+                        const channel = Datastore.Timelines.channels[channelId];
+                        channel.unsubscribe();
+                    }
+                }
+            } catch (error) {
+                console.error("Error unsubscribing:", error);
+            }
+
+        }
     }
 }
 
@@ -311,6 +368,7 @@ const Frame = {
                 [
                     m('.navbar-section', [
                         m('a.btn.btn-link', { onclick: function () { m.route.set('/status') } }, 'Status'),
+                        m('a.btn.btn-link', { onclick: function () { m.route.set('/timeline') } }, 'Timeline'),
                         m('a.btn.btn-link', { onclick: function () { m.route.set('/profile') } }, 'Profile')
                     ]),
                     m('.navbar-section',
@@ -354,6 +412,34 @@ const LoginBase = {
             m('h1', 'Sign in to continue'),
             m('button', { onclick: function () { signin() } }, 'Sign In')
         ])
+    }
+}
+// Base component for Timeline Route
+const TimelineBase = {
+    oninit: function(){
+        Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels));
+    },
+    view: function (vnode) {
+        let events = [];
+
+        // Get events from all channels in the timeline
+        const channels = Object.keys(Datastore.Channels);
+        for (let i = 0; i < channels.length; i++) {
+            const channelId = channels[i];
+            if ( Datastore.Timelines.channels[channelId] !== undefined ){
+                events = events.concat(Object.values(Datastore.Timelines.channels[channelId].docs));
+            }
+        }
+        // Sort events
+        events = events.sort( (a,b) => { return b.date.getTime() - a.date.getTime() });
+        
+        let eventElems = [];
+        for (let i = 0; i < events.length; i++) {
+            const event = events[i];
+            eventElems.push(m(EventTile, {key: i, event: event, channelId: vnode.attrs.channelId} ));
+        }
+
+        return m('#Timeline.container.grid-lg',eventElems);
     }
 }
 
@@ -596,6 +682,57 @@ const KeyEditor = {
         return fields;
     }
 }
+
+// Compact card for timeline list
+const EventTile ={
+    view: function (vnode) {
+        let event = vnode.attrs.event;
+        let channelId = vnode.attrs.channelId;
+        let topicId = event.topic;
+
+        let valueElement = null;
+        if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
+            valueElement = m('.tile-icon',[m('.tile-image',
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
+                m('img.img-responsive', {'src': event.value})
+            ),
+            m('.modal' + (vnode.state.showModal ? '.active' : ''),
+                { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
+                [m('.modal-overlay'),
+                    m('.modal-container',m('img.img-responsive', {'src': event.value}))]
+            )
+        ]);
+        } else {
+            valueElement = m('.tile-icon' + valueClasses(event),
+                m('.event-value',
+                    m('.text-center', formatValue(event))
+                )
+            );
+        }
+
+        let headerElement = m('.tile-content',[
+            m('.tile-title',[
+                m('span', event.subject)
+            ]),
+            m('.tile-subtitle.text-gray',[
+                m('.text-small.tooltip', {
+                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma"),
+                    'onclick': function () { vnode.state.showHistory = !vnode.state.showHistory }
+                }, moment(event.date).fromNow())
+            ])
+        ]);
+
+        let tile = 
+            m('#' + channelId + '-' + topicId + '.tile.tile-centered',[
+                valueElement,
+                headerElement
+            ])
+        ;
+
+        return tile;
+
+    }
+};
 
 // Card showing a single event and the option to view history for events in the same topic
 const EventCard = {
@@ -1021,7 +1158,7 @@ function valueClasses(event) {
             break;
     }
 
-    return "." + classes.join('.');
+    return ".val-" + classes.join('.val-');
 }
 
 function formatValue(event, simple) {
@@ -1144,6 +1281,11 @@ m.route(appRoot, '/loading', {
         render: function (vnode) {
             Datastore.RuntimePrefs.statusFocus = vnode.attrs.tag;
             return m(Frame, m(StatusBase))
+        },
+    },
+    '/timeline': {
+        render: function (vnode) {
+            return m(Frame, m(TimelineBase))
         },
     },
     '/login': {
