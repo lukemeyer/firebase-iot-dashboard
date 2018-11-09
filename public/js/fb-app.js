@@ -19,6 +19,8 @@ function signin() {
 // Listen for Auth change to get data
 firebase.auth().onAuthStateChanged(function (user) {
     if (user) {
+        m.route.set('/loading');
+        
         // User is signed in.
         Datastore.init(user);
 

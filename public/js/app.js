@@ -44,9 +44,6 @@ let Datastore = {
                 // Found user
                 console.log("User successfully loaded.");
                 Datastore.User = doc.data();
-                let statusRoute = '/status/';
-                statusRoute += Datastore.RuntimePrefs.statusFocus ? Datastore.RuntimePrefs.statusFocus : 'all';
-                m.route.set(statusRoute);
             } else {
                 // First login, store user to DB
                 Datastore.User = {'displayName': user.displayName, 'uid': user.uid};
@@ -66,14 +63,34 @@ let Datastore = {
             // Set up connections
             Datastore.UserFunctions.subscribe();
             Datastore.AccessKeyFunctions.subscribe();
-            Datastore.ChannelFunctions.subscribe();
+            Datastore.ChannelFunctions.subscribe().then(function(channels){
+                
+                if ( Datastore.RuntimePrefs.statusFocus ) {
+
+                    let route = '/status/' + Datastore.RuntimePrefs.statusFocus;
+                    m.route.set(route);
+                    Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels)).then(function(){
+                        Datastore.Status.subscribed = true;
+                    });
+                } else {
+                    //route = '/timeline';
+                    Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels)).then(function(){
+                        Datastore.Status.subscribed = true;
+                        m.route.set('/timeline');
+                    });
+                }
+                
+            }).catch(function(e){
+                console.error(e)
+            });
         })
         .catch(function(error){
             console.error("Error retrieving user: ", error);
         });
     },
     Status: {
-        Connected: false
+        Connected: false,
+        subscribed: false
     },
     User: {},
     UserFunctions: {
@@ -153,13 +170,31 @@ let Datastore = {
                 }
             });
         },
-        setHidden: function(channelId,topicId,isHidden) {
+        setHidden: function(channelId,topicId,view,isHidden) {
             let displayUpdate = {};
-            displayUpdate['displayPreferences.' + channelId + '.' + topicId + '.hidden'] = isHidden;
+            displayUpdate['displayPreferences.' + channelId + '.' + topicId + '.' + view + '.hidden'] = isHidden;
 
             firebase.firestore().collection('Users').doc(Datastore.User.uid).update(displayUpdate)
-            .then(function(){ console.log('Topic "' + topicId + '" visibility saved.'); })
+            .then(function(){ console.log('Topic "' + topicId + '" hidden: ' + isHidden + ' saved.'); })
             .catch(function(err){ console.error('Error saving topic visibility.',err)});
+        },
+        getHidden: function(channelId,topicId,view) {
+            let displayPrefs = {
+                hidden: false,
+                override: false,
+            }
+
+            if ( Datastore.RuntimePrefs && Datastore.RuntimePrefs.showHidden ) {
+                displayPrefs.override = Datastore.RuntimePrefs.showHidden;
+            }
+            displayPrefs.hidden = 
+            (Datastore.User.hasOwnProperty('displayPreferences') && 
+            Datastore.User.displayPreferences.hasOwnProperty(channelId) && 
+            Datastore.User.displayPreferences[channelId].hasOwnProperty(topicId) && 
+            Datastore.User.displayPreferences[channelId][topicId].hasOwnProperty(view)) &&
+            Datastore.User.displayPreferences[channelId][topicId][view].hidden === true;
+
+            return displayPrefs;
         }
     },
     AccessKeys:{},
@@ -218,22 +253,26 @@ let Datastore = {
     Channels: {},
     ChannelFunctions :{
         subscribe: function(){
-            // Get Channels the user can view
-            Datastore.ChannelFunctions.unsubscribe = Datastore.db.collection('Channels').where('viewers.' + Datastore.User.uid,'==',true)
-            .onSnapshot(function(snapshot){
-                //console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
-                snapshot.docChanges.forEach(function(change){
-                    if (change.type === 'added' || change.type === 'modified' ){
-                        Datastore.Channels[change.doc.id] = change.doc.data();
-                    }
-                    if ( change.type === 'removed' ){
-                        delete Datastore.Channels[change.doc.id];
-                    }
+            return new Promise( function (resolve, reject){
+                // Get Channels the user can view
+                Datastore.ChannelFunctions.unsubscribe = Datastore.db.collection('Channels').where('viewers.' + Datastore.User.uid,'==',true)
+                .onSnapshot(function(snapshot){
+                    //console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
+                    snapshot.docChanges.forEach(function(change){
+                        if (change.type === 'added' || change.type === 'modified' ){
+                            Datastore.Channels[change.doc.id] = change.doc.data();
+                        }
+                        if ( change.type === 'removed' ){
+                            delete Datastore.Channels[change.doc.id];
+                        }
+                    });
+                    // Redraw after commiting changes
+                    m.redraw();
+                    resolve(Object.keys(Datastore.Channels));
+                },function(error){
+                    reject(error);
                 });
-                // Redraw after commiting changes
-                m.redraw();
             });
-            
         },
         unsubscribe: null,
         create : function(){
@@ -304,45 +343,47 @@ let Datastore = {
     Timelines: {},
     TimelineFunctions: {
         subscribe: function(channels, timelineStart){
-            Datastore.Timelines.channels = {};
-            const startDate = timelineStart || moment().startOf('day').toDate();
-            if ( Datastore.Timelines.days === undefined ){
-                Datastore.Timelines.days = {};
-            }
-
-            let timelineRoot = Datastore.Timelines;
-
-            // Get Channels the user can view
-            for (let i = 0; i < channels.length; i++) {
-                const channelId = channels[i];
-
-                if ( timelineRoot.channels[channelId] === undefined ){
-                    timelineRoot.channels[channelId] = {
-                        docs: {}
-                    };
+            return new Promise( function (resolve, reject){
+                Datastore.Timelines.channels = {};
+                const startDate = timelineStart || moment().startOf('day').toDate();
+                if ( Datastore.Timelines.days === undefined ){
+                    Datastore.Timelines.days = {};
                 }
 
-                timelineRoot.channels[channelId].unsubscribe = Datastore.db.collection('Channels').doc(channelId).collection('Events')
-                .where('date', '>=', startDate)
-                .orderBy('date','desc')
-                .onSnapshot(function(snapshot){
-                    //console.log('Got ' + snapshot.docChanges.length + ' timeline changes');
-                    snapshot.docChanges.forEach(function(change){
-                        if (change.type === 'added' || change.type === 'modified' ){
-                            const event = change.doc.data();
-                            const isHidden = Datastore.User.displayPreferences && Datastore.User.displayPreferences[channelId] && Datastore.User.displayPreferences[channelId][event.topic] && Datastore.User.displayPreferences[channelId][event.topic].hidden;
-                            if (!isHidden){
-                                timelineRoot.channels[channelId].docs[change.doc.id] = change.doc.data();
+                let timelineRoot = Datastore.Timelines;
+
+                // Get Channels the user can view
+                for (let i = 0; i < channels.length; i++) {
+                    const channelId = channels[i];
+
+                    if ( timelineRoot.channels[channelId] === undefined ){
+                        timelineRoot.channels[channelId] = {
+                            docs: {}
+                        };
+                    }
+
+                    timelineRoot.channels[channelId].unsubscribe = Datastore.db.collection('Channels').doc(channelId).collection('Events')
+                    .where('date', '>=', startDate)
+                    .orderBy('date','desc')
+                    .onSnapshot(function(snapshot){
+                        //console.log('Got ' + snapshot.docChanges.length + ' timeline changes');
+                        snapshot.docChanges.forEach(function(change){
+                            if (change.type === 'added' || change.type === 'modified' ){
+                                const event = change.doc.data();
+                                timelineRoot.channels[channelId].docs[change.doc.id] =Object.assign({},{"channelId": channelId}, change.doc.data());
                             }
-                        }
-                        if ( change.type === 'removed' ){
-                            delete timelineRoot.channels[channelId].docs[change.doc.id];
-                        }
+                            if ( change.type === 'removed' ){
+                                delete timelineRoot.channels[channelId].docs[change.doc.id];
+                            }
+                        });
+                        // Redraw after commiting changes
+                        resolve(Datastore.Timelines.channels);
+                        m.redraw();
+                    }, function(error){
+                        reject(error);
                     });
-                    // Redraw after commiting changes
-                    m.redraw();
-                });
-            } 
+                }
+            });
         },
         unsubscribe: function(){
             try {
@@ -416,14 +457,13 @@ const LoginBase = {
 }
 // Base component for Timeline Route
 const TimelineBase = {
-    oninit: function(){
-        Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels));
-    },
     view: function (vnode) {
+
         let events = [];
 
         // Get events from all channels in the timeline
-        const channels = Object.keys(Datastore.Channels);
+        const channels = Object.keys(Datastore.Timelines.channels);
+        
         for (let i = 0; i < channels.length; i++) {
             const channelId = channels[i];
             if ( Datastore.Timelines.channels[channelId] !== undefined ){
@@ -436,10 +476,14 @@ const TimelineBase = {
         let eventElems = [];
         for (let i = 0; i < events.length; i++) {
             const event = events[i];
-            eventElems.push(m(EventTile, {key: i, event: event, channelId: vnode.attrs.channelId} ));
+            const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
+            if ( displayPrefs.override || !displayPrefs.hidden ){
+                eventElems.push(m(EventTile, {key: i, event: event, channelId: event.channelId} ));
+            }
         }
 
         return m('#Timeline.container.grid-lg',eventElems);
+        
     }
 }
 
@@ -516,9 +560,6 @@ const Channel = {
         children.push(m('.channel-header.column.col-12',m('h1', channel.name)));
         let panels = [];
 
-        // Get display prefs for this channel
-        let channelDisplayPrefs = (Datastore.User.displayPreferences && Datastore.User.displayPreferences[vnode.attrs.channelId]) || {};
-
         let sortedKeys = Object.keys(channel.latest).sort(function (a,b) {
             if ( channel.latest[a].topicType == channel.latest[b].topicType ){
                 return channel.latest[a].subject < channel.latest[b].subject ? -1 : 1;
@@ -531,9 +572,8 @@ const Channel = {
         sortedKeys.forEach( function(key){
             if (channel.latest.hasOwnProperty(key)) {
                 let element = channel.latest[key];
-                let topicDisplayPrefs = channelDisplayPrefs && channelDisplayPrefs[key] || {hidden: false};
-                let topicIsVisible = Datastore.RuntimePrefs.showHidden || !topicDisplayPrefs.hidden;
-                if ( topicIsVisible ){
+                const displayPrefs = Datastore.UserFunctions.getHidden(vnode.attrs.channelId,key,'status');
+                if ( displayPrefs.override || !displayPrefs.hidden ){
                     panels.push(m(EventCard, {key: key, event: element, channelId: vnode.attrs.channelId} ));
                 }
             }
@@ -690,6 +730,8 @@ const EventTile ={
         let channelId = vnode.attrs.channelId;
         let topicId = event.topic;
 
+        const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
+
         let valueElement = null;
         if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
             valueElement = m('.tile-icon',[m('.tile-image',
@@ -703,8 +745,8 @@ const EventTile ={
             )
         ]);
         } else {
-            valueElement = m('.tile-icon' + valueClasses(event),
-                m('.event-value',
+            valueElement = m('.tile-icon',
+                m('.event-value' + valueClasses(event),
                     m('.text-center', formatValue(event))
                 )
             );
@@ -715,15 +757,17 @@ const EventTile ={
                 m('span', event.subject)
             ]),
             m('.tile-subtitle.text-gray',[
-                m('.text-small.tooltip', {
-                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma"),
-                    'onclick': function () { vnode.state.showHistory = !vnode.state.showHistory }
-                }, moment(event.date).fromNow())
+                m('.text-small.tooltip.tooltip-bottom', {
+                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma")
+                }, moment(event.date).format("h:mma")),
+                m('.text-small', { onclick: function () {
+                    Datastore.UserFunctions.setHidden(channelId,topicId,'timeline',!displayPrefs.hidden);
+                }}, 'hide')
             ])
         ]);
 
         let tile = 
-            m('#' + channelId + '-' + topicId + '.tile.tile-centered',[
+            m('#' + channelId + '-' + topicId + '.tile.tile-centered.' + event.valueType + (displayPrefs.hidden ? '.hidden' : ''),[
                 valueElement,
                 headerElement
             ])
@@ -741,8 +785,8 @@ const EventCard = {
         let channelId = vnode.attrs.channelId;
         let topicId = event.topic;
 
-        let isHidden = Datastore.User.displayPreferences && Datastore.User.displayPreferences[channelId] && Datastore.User.displayPreferences[channelId][topicId] && Datastore.User.displayPreferences[channelId][topicId].hidden;
-        
+        const displayPrefs = Datastore.UserFunctions.getHidden(channelId, topicId, 'status');
+
         let notificationPreference = Datastore.User.notificationPreferences[channelId + '-' + topicId] !== undefined ? 
             Datastore.User.notificationPreferences[channelId + '-' + topicId].frequency : 
             'never';
@@ -813,9 +857,9 @@ const EventCard = {
                 ),
                 m('tr',
                     { onclick: function () {
-                        Datastore.UserFunctions.setHidden(channelId,topicId,!isHidden);
+                        Datastore.UserFunctions.setHidden(channelId,topicId,'status',!displayPrefs.hidden);
                     }},
-                    m('td', isHidden ? 'unHide' : 'Hide')
+                    m('td', displayPrefs.hidden ? 'unHide' : 'Hide')
                 ),
             ])
         )]
@@ -843,8 +887,8 @@ const EventCard = {
         }
         let mobileCols = 'col-xs-6'; //vnode.state.showHistory ? 'col-xs-12' : 'col-xs-6';
 
-        let card = m('#' + channelId + '-' + topicId + '.channel-event.column.' + mobileCols + standardCols,
-            m('.card.eventCard' + (isHidden ? '.hidden':''),[
+        let card = m('#' + channelId + '-' + topicId + '.channel-event.column.' + event.valueType + '.' + mobileCols + standardCols,
+            m('.card.eventCard' + (displayPrefs.hidden ? '.hidden':''),[
                 valueElement,
                 headerElement,
                 vnode.state.showMenu ? menuElement : null, // menu visibility
@@ -1284,6 +1328,11 @@ m.route(appRoot, '/loading', {
         },
     },
     '/timeline': {
+        onmatch: function(){
+            if ( !Datastore.Status.subscribed ){
+                m.route.set('/loading');
+            }
+        },
         render: function (vnode) {
             return m(Frame, m(TimelineBase))
         },

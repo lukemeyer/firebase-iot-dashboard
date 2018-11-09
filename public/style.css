@@ -128,6 +128,11 @@ input[type=range] {
     padding: .35rem 1rem;
 }
 
+.event-value {
+    font-weight: 200;
+    text-transform: uppercase;
+}
+
 .val-positive,
 .val-active {
     color: #82C2B6;
@@ -170,6 +175,10 @@ input[type=range] {
     color: #B81616;
 }
 
+.switch-status .event-value.val-active {
+    font-weight: 900;
+}
+
 #frame {
     padding: 0 .4rem;
 }
@@ -177,12 +186,36 @@ input[type=range] {
     padding: .4rem;
 }
 
+.tile.tile-centered .tile-content,
+.tile.tile-centered .tile-subtitle,
+.tile.tile-centered .tile-title {
+    overflow: visible;
+    flex-grow: 0;
+}
+
 #Timeline .tile {
+    font-size: 1.5em;
+    line-height: 1.3em;
     padding: .5em;
     margin-bottom: .5em;
 }
+#Timeline .tile.hidden {
+    background-color: #000;
+}
 #Timeline .tile-icon {
+    min-width: 50px;
     max-width: 150px;
+}
+#Timeline .tile.image_url {
+    flex-direction: column;
+    align-items: flex-start;
+}
+#Timeline .tile.image_url .tile-icon {
+    max-width: 300px;
+}
+#Timeline .tile.image_url .tile-content:not(:first-child) {
+    padding-left: 0;
+    padding-top: .4rem;
 }
 
 
@@ -247,8 +280,6 @@ input[type=range] {
     font-size: 1.25em;
 }
 .eventCard .event-value {
-    font-weight: 200;
-    text-transform: uppercase;
     font-size: 2em;
     line-height: 1.2em;
     padding-left: 1.25em;
