@@ -415,14 +415,14 @@ const Frame = {
                     m('.navbar-section',
                         [
                             m(ConnectionStatus),
-                            m('.loginout', m('button', {
+                            m('a.btn.btn-link', {
                                 disabled: Datastore.User === null,
                                 onclick: function () {
                                     firebase.auth().signOut().then(function () {
                                         Datastore.User = null;
                                     })
                                 }
-                            }, 'Sign Out'))
+                            }, 'Sign Out')
                         ]
                     )
                 ]
@@ -732,12 +732,20 @@ const EventTile ={
 
         const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
 
-        let valueElement = null;
+        let coverElement = null;
         if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
-            valueElement = m('.tile-icon',[m('.tile-image',
+            coverElement = m('.tile-cover',
                 { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
                 m('img.img-responsive', {'src': event.value})
-            ),
+            );
+        }
+
+        let valueElement = null;
+        if ( event.valueType == 'image' || event.valueType == 'image_url' ) {
+            valueElement = m('.tile-icon',[
+                m('.event-value' + valueClasses(event),
+                    m('.text-center', formatValue(event))
+                ),
             m('.modal' + (vnode.state.showModal ? '.active' : ''),
                 { onclick: function () { vnode.state.showModal = !vnode.state.showModal }},
                 [m('.modal-overlay'),
@@ -760,18 +768,36 @@ const EventTile ={
                 m('.text-small.tooltip.tooltip-bottom', {
                     'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma")
                 }, moment(event.date).format("h:mma")),
-                m('.text-small', { onclick: function () {
-                    Datastore.UserFunctions.setHidden(channelId,topicId,'timeline',!displayPrefs.hidden);
-                }}, 'hide')
             ])
         ]);
 
-        let tile = 
-            m('#' + channelId + '-' + topicId + '.tile.tile-centered.' + event.valueType + (displayPrefs.hidden ? '.hidden' : ''),[
-                valueElement,
-                headerElement
+        let actionElement = m('.tile-action',
+            m('.dropdown' + (vnode.state.showMenu ? '.active' : ''),[
+                //<a href="#" class="btn btn-link dropdown-toggle" tabindex="0">
+                m('a.dropdown-toggle',
+                    { href: '#', tabindex: 0 },
+                    //{ onclick: function () { vnode.state.showMenu = !vnode.state.showMenu },
+                    //  onblur: function () { vnode.state.showMenu = false }},
+                    m('i.material-icons.type-icon','more_vert'),
+                ),
+                m('ul.menu',[
+                    m('li.menu-item', { onclick: function () {
+                        Datastore.UserFunctions.setHidden(channelId,topicId,'timeline',!displayPrefs.hidden);
+                    }}, (displayPrefs.hidden ? 'UnHide' : 'Hide'))
+                ])
             ])
-        ;
+        );
+
+        let tile = 
+            m('#' + channelId + '-' + topicId + '.tile-container'+ (displayPrefs.hidden ? '.hidden' : ''),
+            [
+                coverElement,
+                m('.tile.' + event.valueType,[
+                    valueElement,
+                    headerElement,
+                    actionElement
+                ])
+            ]);
 
         return tile;
 
