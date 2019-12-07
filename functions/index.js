@@ -1,3 +1,21 @@
+//@ts-check
+/**
+ * Payload
+ * @typedef {Object} Payload
+ *
+ * @property {string} apiKey    Api key - required
+ * @property {string} topic     Consistent name for related events
+ * @property {string} topicType Type of data (may be used to format display of events in this topic)
+ * @property {string} date      Date of event occurence
+ * @property {Date}   received  Date event was received - optional
+ * @property {Number} delay     ms Time duration between when the event occurred and when it was recieved - optional
+ * @property {string} subject   Short description of event (may be used in notifications, etc.)
+ * @property {string} message   Full event description
+ * @property {string} value     Event value
+ * @property {string} valueType Type of event value (may be used to format display of value)
+ * @property {Object} meta      Key-Value pairs of additional info
+ * 
+ */
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 
@@ -129,7 +147,10 @@ exports.api = functions.https.onRequest(
         return res.status(400).send("Invalid content-type");
     }
 
+    /** @type Payload */
     let payload = req.body;
+    // Add creation date to payload.
+    payload.received = new Date();
 
     // Get the apiKey from params or payload
     let activeKey;
@@ -161,8 +182,8 @@ exports.api = functions.https.onRequest(
                     const user = userDocumentSnapshot.data();
                     // Format the payload for saving
                     // format payload: look for custom formatter or use default
-                    if (PayloadFormatter.hasOwnProperty(payload.type)) {
-                        payload = PayloadFormatter[payload.type](payload, user);
+                    if (PayloadFormatter.hasOwnProperty(payload.topicType)) {
+                        payload = PayloadFormatter[payload.topicType](payload, user);
                     } else {
                         payload = PayloadFormatter.default(payload, user);
                     }
@@ -199,7 +220,7 @@ exports.api = functions.https.onRequest(
                     res.send(400);
                 });
             } else {
-                console.log('API key is not authorized', err);
+                console.log('API key is not authorized');
                 res.status(400).send("API key is not authorized");
             }
         }
@@ -309,10 +330,19 @@ function buildStatusPathFromEvent(event) {
     return segments.join('/');
 }
 
+/**
+ * Formats a datestring into a local string in the provided timezone
+ * 
+ * @param {string} dateString 
+ * @param {string} timezone 
+ * 
+ * @returns {(Date|string)} date formatted in the local timezone
+ */
 function normalizeDate(dateString, timezone) {
     // Parse the date string
     let newDate = chrono.parse(dateString);
 
+    // Check if timezone was inferred by chrono
     if (!newDate[0].start.isCertain('timezoneOffset')) {
         // Build a date string with the timezone name
         const refString = new Date().toLocaleString("en-US", { timeZone: timezone, timeZoneName: "short" });
@@ -329,10 +359,11 @@ const PayloadFormatter = {
     default: function (payload, user) {
         //Standardize date format
         try {
-            payload.date = normalizeDate(payload.date, user.timezone); //Firestore.TimeStamp.fromDate(normalizeDate(payload.date, user.timezone));
+            payload.date = normalizeDate(payload.date, user.timezone);
+            payload.delay = payload.received - payload.date;
         } catch (error) {
             console.error("Error parsing date: " + payload.date + ", current time used instread.")
-            payload.date = payload.date || new Date(); //Firestore.TimeStamp.now();
+            payload.date = payload.date || new Date();
         }
 
         return payload;

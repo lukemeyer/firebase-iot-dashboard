@@ -1,5 +1,9 @@
 'use strict';
 
+const thresholds = {
+    maxAcceptableDelay: 30 * 1000 // Delay in ms after which it is shown to user
+}
+
 const nameIcons = {
     'contact': '🚪',
     'motion': '👁️',
@@ -760,14 +764,18 @@ const EventTile ={
             );
         }
 
+        if ( !event.delay ){
+            event.delay = event.received - event.date;
+        }
+        
         let headerElement = m('.tile-content',[
             m('.tile-title',[
                 m('span', event.subject)
             ]),
             m('.tile-subtitle.text-gray',[
                 m('.text-small.tooltip.tooltip-bottom', {
-                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma")
-                }, moment(event.date).format("h:mma")),
+                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mm:ssa")
+                }, moment(event.date).fromNow() + (event.delay > thresholds.maxAcceptableDelay ? " (delayed " + moment.duration(event.delay).humanize() + ")" : "" )),
             ])
         ]);
 
@@ -835,13 +843,17 @@ const EventCard = {
             );
         }
 
+        if ( !event.delay ){
+            event.delay = event.received - event.date;
+        }
+
         let headerElement = m('.card-header.d-flex',[
             m('.card-title',[
                 m('span', event.subject),
                 m('.text-small.tooltip', {
                     'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mma"),
                     'onclick': function () { vnode.state.showHistory = !vnode.state.showHistory }
-                }, moment(event.date).fromNow()),
+                }, moment(event.date).fromNow() + (event.delay > thresholds.maxAcceptableDelay ? " (delayed " + moment.duration(event.delay).humanize() + ")" : "" )),
                 m('.event-history', m('i.material-icons.type-icon',
                 { onclick: function () { vnode.state.showHistory = !vnode.state.showHistory }}, 
                 'history'))
