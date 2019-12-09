@@ -538,8 +538,8 @@ const TimelineBase = {
                 eventCluster.events = eventCluster.events.sort( (a,b) => { return a.date.getTime() - b.date.getTime() });
             }
 
-            let eventElems = eventCluster.events.map( (event) => {
-                return m(EventTile, {key: i, event: event, channelId: event.channelId, timeDisplay: (eventCluster.type == 'related' ? 'absolute' : 'relative')} );
+            let eventElems = eventCluster.events.map( (event,i,events) => {
+                return m(EventTile, {key: i, event: event, channelId: event.channelId, timeDisplay: (eventCluster.type == 'related' ? 'absolute' : 'relative'), last: i == events.length -1 } );
             });
 
             clusteredElements.push(m('.event-cluster.columns',[
@@ -795,6 +795,7 @@ const EventTile ={
         let event = vnode.attrs.event;
         let channelId = vnode.attrs.channelId;
         const timeDisplay = vnode.attrs.timeDisplay;
+        const isLast = vnode.attrs.last;
         let topicId = event.topic;
 
         const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
@@ -865,7 +866,7 @@ const EventTile ={
         );
 
         let tile = 
-            m('#' + channelId + '-' + topicId + '.tile-container.column.col-mr-auto.col-md-6.col-4.col-xs-12'+ (displayPrefs.hidden ? '.hidden' : ''),
+            m('#' + channelId + '-' + topicId + '.tile-container.column.' + (isLast ? 'col-mr-auto' : '') + '.col-md-6.col-4.col-xs-12'+ (displayPrefs.hidden ? '.hidden' : ''),
             [
                 coverElement,
                 m('.tile.' + event.valueType,[
