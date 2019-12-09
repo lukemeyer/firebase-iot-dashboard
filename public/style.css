@@ -193,16 +193,21 @@ input[type=range] {
     flex-grow: 0;
 }
 
-#Timeline .tile-container {
+/* #Timeline .tile-container {
     max-width: 350px;
     margin: 0 auto;
-}
+} */
 #Timeline .tile {
     font-size: 1.5em;
     line-height: 1.3em;
     padding: .5em;
     margin-bottom: .5em;
     align-items: baseline;
+}
+#Timeline .event-cluster {
+    border-bottom: 1px solid #333;
+    padding: .5em;
+    margin-bottom: .5em;
 }
 #Timeline .tile-container.hidden {
     background-color: #000;

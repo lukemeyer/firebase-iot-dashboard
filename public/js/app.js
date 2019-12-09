@@ -1,7 +1,8 @@
 'use strict';
 
 const thresholds = {
-    maxAcceptableDelay: 30 * 1000 // Delay in ms after which it is shown to user
+    maxAcceptableDelay: 30 * 1000, // Delay in ms after which it is shown to user
+    maxClusterDistance: 5 * 60 * 1000 // Max distance in ms to consider events as part of the same group
 }
 
 const nameIcons = {
@@ -474,19 +475,80 @@ const TimelineBase = {
                 events = events.concat(Object.values(Datastore.Timelines.channels[channelId].docs));
             }
         }
-        // Sort events
+        // Filter events
+        events = events.filter((event) => {
+            const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
+            return displayPrefs.override || !displayPrefs.hidden;
+        });
+
+        // Sort events newest first
         events = events.sort( (a,b) => { return b.date.getTime() - a.date.getTime() });
-        
-        let eventElems = [];
+
+        // Cluster events
+        let eventClusters = [];
+        let clusterIndex = 0;
+        let lastEventTimestamp = events[0].date.getTime();
+        eventClusters[clusterIndex] = {
+            type:'grouped',
+            events: [],
+            label:''
+        };
+
+        // Create clusters when events are less than maxClusterDistance apart
         for (let i = 0; i < events.length; i++) {
             const event = events[i];
-            const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
-            if ( displayPrefs.override || !displayPrefs.hidden ){
-                eventElems.push(m(EventTile, {key: i, event: event, channelId: event.channelId} ));
+            if ( lastEventTimestamp - event.date.getTime() > thresholds.maxClusterDistance ){
+                clusterIndex++;
+                eventClusters[clusterIndex] = {
+                    type:'grouped',
+                    events: [],
+                    label:''
+                };
             }
+            eventClusters[clusterIndex].events.push(event);
+            lastEventTimestamp = event.date.getTime();
         }
 
-        return m('#Timeline.container.grid-lg',eventElems);
+        // Re-cluster singles: group all adjacent single-item clusters
+        let aggregatorIdx = 0;
+        for (let i = 0; i < eventClusters.length; i++) {
+            const cluster = eventClusters[i];
+            if ( cluster.events.length < 2 ) {
+                if ( aggregatorIdx > -1 && aggregatorIdx != i){
+                    eventClusters[aggregatorIdx].events = eventClusters[aggregatorIdx].events.concat(cluster.events);
+                    eventClusters[i].events = [];
+                } else {
+                    aggregatorIdx = i;
+                }
+            } else {
+                cluster.type = 'related';
+                aggregatorIdx = -1;
+            }
+        }
+        // Filter empty clusters
+        eventClusters = eventClusters.filter((val)=>{return val.events.length > 0});
+        
+        // Output events grouped by cluster
+        let clusteredElements = [];
+        for (let i = 0; i < eventClusters.length; i++) {
+            let eventCluster = eventClusters[i];
+
+            // Sort events oldest first inside related clusters
+            if ( eventCluster.type == 'related' ){
+                eventCluster.events = eventCluster.events.sort( (a,b) => { return a.date.getTime() - b.date.getTime() });
+            }
+
+            let eventElems = eventCluster.events.map( (event) => {
+                return m(EventTile, {key: i, event: event, channelId: event.channelId, timeDisplay: (eventCluster.type == 'related' ? 'absolute' : 'relative')} );
+            });
+
+            clusteredElements.push(m('.event-cluster.columns',[
+                m('.column.col-12',
+                (eventCluster.type == 'related' ? m('h4',moment(eventCluster.events[0].date).fromNow()) : '') ),
+                eventElems]));
+        }
+
+        return m('#Timeline.container.grid-lg',clusteredElements);
         
     }
 }
@@ -732,6 +794,7 @@ const EventTile ={
     view: function (vnode) {
         let event = vnode.attrs.event;
         let channelId = vnode.attrs.channelId;
+        const timeDisplay = vnode.attrs.timeDisplay;
         let topicId = event.topic;
 
         const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
@@ -772,15 +835,20 @@ const EventTile ={
             m('.tile-title',[
                 m('span', event.subject)
             ]),
-            m('.tile-subtitle.text-gray',[
-                m('.text-small.tooltip.tooltip-bottom', {
-                    'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mm:ssa")
-                }, moment(event.date).fromNow() + (event.delay > thresholds.maxAcceptableDelay ? " (delayed " + moment.duration(event.delay).humanize() + ")" : "" )),
-            ])
+            m('.tile-subtitle.text-gray',
+                ( timeDisplay == 'relative' ? 
+                    [m('.text-small.tooltip.tooltip-bottom', {
+                        'data-tooltip': moment(event.date).format("dddd, MMM Do, h:mm:ssa")
+                    },
+                    moment(event.date).fromNow() + (event.delay > thresholds.maxAcceptableDelay ? " (delayed " + moment.duration(event.delay).humanize() + ")" : "" )),
+                    ] :
+                    m('.text-small',moment(event.date).format("h:mm:ssa") + (event.delay > thresholds.maxAcceptableDelay ? " (delayed " + moment.duration(event.delay).humanize() + ")" : "" ))
+                ) 
+            )
         ]);
 
         let actionElement = m('.tile-action',
-            m('.dropdown' + (vnode.state.showMenu ? '.active' : ''),[
+            m('.dropdown.dropdown-right' + (vnode.state.showMenu ? '.active' : ''),[
                 //<a href="#" class="btn btn-link dropdown-toggle" tabindex="0">
                 m('a.dropdown-toggle',
                     { href: '#', tabindex: 0 },
@@ -797,7 +865,7 @@ const EventTile ={
         );
 
         let tile = 
-            m('#' + channelId + '-' + topicId + '.tile-container'+ (displayPrefs.hidden ? '.hidden' : ''),
+            m('#' + channelId + '-' + topicId + '.tile-container.column.col-mr-auto.col-md-6.col-4.col-xs-12'+ (displayPrefs.hidden ? '.hidden' : ''),
             [
                 coverElement,
                 m('.tile.' + event.valueType,[
