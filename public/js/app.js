@@ -1,3 +1,4 @@
+//@ts-check
 'use strict';
 
 const thresholds = {
@@ -70,16 +71,16 @@ let Datastore = {
             Datastore.AccessKeyFunctions.subscribe();
             Datastore.ChannelFunctions.subscribe().then(function(channels){
                 
+                // Check for a specific topic link, otherwise show timeline
                 if ( Datastore.RuntimePrefs.statusFocus ) {
 
                     let route = '/status/' + Datastore.RuntimePrefs.statusFocus;
                     m.route.set(route);
-                    Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels)).then(function(){
+                    Datastore.TimelineFunctions.get(Object.keys(Datastore.Channels)).then(function(){
                         Datastore.Status.subscribed = true;
                     });
                 } else {
-                    //route = '/timeline';
-                    Datastore.TimelineFunctions.subscribe(Object.keys(Datastore.Channels)).then(function(){
+                    Datastore.TimelineFunctions.get(Object.keys(Datastore.Channels)).then(function(){
                         Datastore.Status.subscribed = true;
                         m.route.set('/timeline');
                     });
@@ -211,6 +212,7 @@ let Datastore = {
                 .onSnapshot(function(snapshot){
                     //console.log('Got ' + snapshot.docChanges.length + ' AccessKeys changes');
                     snapshot.docChanges.forEach(function(change){
+                        // console.count("Document Read");
                         let key = change.doc.data();
                         //console.log('Key ' + change.doc.id + ' ' + change.type + ' in channel ' + key.channel);
                         if (change.type === 'added' || change.type === 'modified' ){
@@ -264,8 +266,26 @@ let Datastore = {
                 .onSnapshot(function(snapshot){
                     //console.log('Got ' + snapshot.docChanges.length + ' Channels changes');
                     snapshot.docChanges.forEach(function(change){
+                        // console.count("Document Read");
                         if (change.type === 'added' || change.type === 'modified' ){
-                            Datastore.Channels[change.doc.id] = change.doc.data();
+                            const doc = change.doc.data();
+                            const channelId = change.doc.id;
+                            Datastore.Channels[channelId] = doc;
+
+                            // Update Timeline store
+                            if ( Datastore.Status.subscribed ){
+                                // Loop recents in updated doc
+                                for (const topic in doc.latest) {
+                                    if (doc.latest.hasOwnProperty(topic)) {
+                                        const event = doc.latest[topic];
+                                        Datastore.Timelines.events[doc.id] = Object.assign({},{"channelId": channelId}, event);
+                                    // Update latetEventTime
+                                    if ( Datastore.Timelines.latestEventTime === null || event.date > Datastore.Timelines.latestEventTime ) {
+                                        Datastore.Timelines.latestEventTime = event.date;
+                                    }
+                                    }
+                                }
+                            }
                         }
                         if ( change.type === 'removed' ){
                             delete Datastore.Channels[change.doc.id];
@@ -325,6 +345,7 @@ let Datastore = {
             .onSnapshot(function(snapshot){
                 console.log('Got ' + snapshot.docChanges.length + ' topic changes');
                 snapshot.docChanges.forEach(function(change){
+                    // console.count("Document Read");
                     if (change.type === 'added' || change.type === 'modified' ){
                         topicRoot.recent[change.doc.id] = change.doc.data();
                     }
@@ -347,13 +368,46 @@ let Datastore = {
     },
     Timelines: {},
     TimelineFunctions: {
+        get: function(channels, timelineStart){
+            return new Promise( function (resolve, reject){
+                Datastore.Timelines.events = {};
+                Datastore.Timelines.latestEventTime = null;
+                const startDate = timelineStart || moment().startOf('day').toDate();
+
+                // Loop the provided channels
+                for (let i = 0; i < channels.length; i++) {
+                    const channelId = channels[i];
+
+                    // Get events off each channel
+                    Datastore.db.collection('Channels').doc(channelId).collection('Events')
+                    .where('date', '>=', startDate)
+                    .orderBy('date','desc')
+                    .get()
+                    .then(function(snapshot){
+                        console.log('Got ' + snapshot.size + ' timeline events from Channel ' + channelId);
+                        snapshot.forEach(function(doc){
+                            // console.count("Document Read");
+                            const event = doc.data();
+                            Datastore.Timelines.events[doc.id] = Object.assign({},{"channelId": channelId}, doc.data());
+                            // Update latetEventTime
+                            if ( Datastore.Timelines.latestEventTime === null || event.date > Datastore.Timelines.latestEventTime ) {
+                                Datastore.Timelines.latestEventTime = event.date;
+                            }
+                        });
+                        // Redraw after commiting changes
+                        resolve(Datastore.Timelines.events);
+                        m.redraw();
+                    }, function(error){
+                        reject(error);
+                    });
+                }
+            });
+        },
+        // subscribe is deprecated
         subscribe: function(channels, timelineStart){
             return new Promise( function (resolve, reject){
                 Datastore.Timelines.channels = {};
                 const startDate = timelineStart || moment().startOf('day').toDate();
-                if ( Datastore.Timelines.days === undefined ){
-                    Datastore.Timelines.days = {};
-                }
 
                 let timelineRoot = Datastore.Timelines;
 
@@ -464,17 +518,9 @@ const LoginBase = {
 const TimelineBase = {
     view: function (vnode) {
 
-        let events = [];
+        // Build an array of event values
+        let events = Object.values(Datastore.Timelines.events);
 
-        // Get events from all channels in the timeline
-        const channels = Object.keys(Datastore.Timelines.channels);
-        
-        for (let i = 0; i < channels.length; i++) {
-            const channelId = channels[i];
-            if ( Datastore.Timelines.channels[channelId] !== undefined ){
-                events = events.concat(Object.values(Datastore.Timelines.channels[channelId].docs));
-            }
-        }
         // Filter events
         events = events.filter((event) => {
             const displayPrefs = Datastore.UserFunctions.getHidden(event.channelId, event.topic, 'timeline');
@@ -1162,16 +1208,17 @@ const ImageTimeline = {
         let count = 0;
         for( let i in imageEvents){
             const event = imageEvents[i];
+            const imgKey = "imgkey-" + i;
             if ( count.toString() == this.imgIndex ){
                 var eventDate = moment(event.date);
                 children.push(
                     m('p',
-                        (eventDate.isSame(moment(), 'day') ? eventDate.format('LT') : eventDate.calendar()) + (this.loadedImgs[i] === true ? "" : " loading...")
+                        (eventDate.isSame(moment(), 'day') ? eventDate.format('LT') : eventDate.calendar()) + (this.loadedImgs[imgKey] === true ? "" : " loading...")
                     )
                 );
                 children.push(m('img', {
                     'src': event.value,
-                    'data-key': i,
+                    'data-key': "imgkey-" + i,
                     onload: m.withAttr("data-key", function(v){
                         vnode.state.loadedImgs[v] = true;
                     })
@@ -1183,9 +1230,9 @@ const ImageTimeline = {
             'type': 'range',
             'min': 0,
             'max': count - 1,
-            //value: this.imgIndex,
+            'value': this.imgIndex,
             oninput: m.withAttr("value", function(v){
-                vnode.state.imgIndex = (count - 1) - v;
+                vnode.state.imgIndex = v;
             })
         }));
         return m('div.imagetimeline',children);
@@ -1378,7 +1425,7 @@ function formatValue(event, simple) {
     }
 
     if ( event.topicType === 'wunderground_weather' ){
-        formatted = simple === true ? event-message : m('.text-small',event.message);
+        formatted = simple === true ? event.message : m('.text-small',event.message);
     }
 
     return formatted;
